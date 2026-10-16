@@ -117,6 +117,9 @@ conversation URLs, and virtualized history. When a send cannot be verified,
 WTAgent preserves the session for recovery. Structural failure reports identify
 the recognized page layout, missing identity fields, and send stage; the CLI
 shows the report path for startup, send-confirmation, and recovery failures.
+When ChatGPT truncates a collapsed long message, WTAgent expands the latest
+user message before verifying its send marker. Recovery checks the existing
+reply without automatically resending a message whose commit is uncertain.
 
 Claude keeps the model selected by claude.ai in its browser profile; WTAgent does not override it.
 Gemini likewise keeps the model selected in its browser profile.
@@ -226,6 +229,8 @@ wtagent --model gemini --type music --once "生成一段舒缓钢琴纯音乐，
 ### 会话恢复与兼容诊断
 
 ChatGPT 适配器支持新旧消息结构、临时会话地址和只保留部分消息节点的长对话。无法确认发送结果时，会保留会话供恢复。结构化诊断会记录识别到的页面结构、缺失的消息身份字段和发送阶段；启动、发送确认或恢复失败时，终端会显示诊断文件路径。
+
+ChatGPT 折叠长消息并截断页面文本时，WTAgent 会先展开最新的用户消息，再核对发送标记。恢复时会校验已有回复，不会自动重发提交状态不明的消息。
 
 Claude 会沿用 claude.ai 在该浏览器 Profile 中选择的模型，WTAgent 不会自动切换模型。
 Gemini 同样沿用其浏览器 Profile 当前选择的模型。

@@ -237,6 +237,22 @@ export class ChatGPTWebAdapter extends BaseWebAdapter {
     )).catch(() => null);
   }
 
+  async prepareOutboundConfirmation({ outboundId, deadline } = {}) {
+    if (!isValidOutboundCorrelationId(outboundId)) return;
+    // ChatGPT's Show more control can truncate the actual DOM text at 10,000
+    // characters, omitting our final nonce even after the model has replied.
+    // Scope the structural disclosure control to the latest user message;
+    // localized button text and hidden application state are not commit proof.
+    const message = this.userMessages().last();
+    const expand = message.locator(CHATGPT_DOM.expandUserMessage);
+    if (await expand.count().catch(() => 0) !== 1) return;
+    const text = await message.innerText({ timeout: 1000 }).catch(() => "");
+    if (renderedMessageContainsOutboundMarker(text, outboundId)) return;
+    const remaining = deadline - this.monotonicNow();
+    if (!(remaining > 0)) return;
+    await expand.click({ timeout: Math.min(1000, Math.ceil(remaining)) }).catch(() => {});
+  }
+
   conversationMessages() {
     const legacy = this.page.locator(CHATGPT_DOM.conversationLegacy);
     return legacy.or ? legacy.or(this.page.locator(`${CHATGPT_DOM.user.modern}, ${CHATGPT_DOM.assistant.modern}`)) : legacy;
@@ -637,6 +653,10 @@ export class ChatGPTWebAdapter extends BaseWebAdapter {
           initialUrl,
           navigated,
         });
+        await this.#awaitWithinRecoveryDeadline(
+          () => this.prepareOutboundConfirmation({ outboundId, deadline }),
+          deadline,
+        );
         const snapshot = validatedOrderedSnapshot(
           await this.#awaitWithinRecoveryDeadline(
             () => this.orderedConversationSnapshot().catch(() => null),

@@ -17,6 +17,7 @@ export const CHATGPT_DOM = {
   ],
   send: '[data-testid="send-button"]',
   stop: '[data-testid="stop-button"]',
+  expandUserMessage: '[data-user-message-bubble] button[aria-expanded="false"][data-thread-find-skip="true"][data-markdown-copy="exclude"]',
 };
 CHATGPT_DOM.messages = [legacyUser, legacyAssistant, modern("user"), modern("assistant")].join(", ");
 

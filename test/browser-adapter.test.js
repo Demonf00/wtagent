@@ -3134,6 +3134,8 @@ for (const scenario of ["virtualized tail", "transient read failure", "foreign t
         // The old list had 26 user bubbles; virtualization has retained only
         // the new one. A locator resolved from this stale count cannot finish.
         async count() { return 26; },
+        // Disclosure lookup uses last() without taking a stale count/index.
+        last() { return new EmptyLocator(); },
         nth() {
           staleIndexReads += 1;
           return {

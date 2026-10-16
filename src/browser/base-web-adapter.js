@@ -341,6 +341,11 @@ export class BaseWebAdapter {
     return undefined;
   }
 
+  // Some providers unmount the end of collapsed long user messages. Reveal it
+  // before sampling the transport marker; never infer a commit from the expand
+  // action itself. The caller's send/recovery deadline still bounds this work.
+  async prepareOutboundConfirmation(_options = {}) {}
+
   // Providers with a shared user/assistant turn order return one atomic snapshot.
   // null keeps legacy normal-send behavior but cannot support ambiguous recovery.
   async orderedConversationSnapshot() {
@@ -2836,6 +2841,9 @@ export class BaseWebAdapter {
       const requireCorrelation = outboundId != null
         || requireFreshCorrelation
         || proofNavigated;
+      if (outboundId != null) {
+        await withinDeadline(this.prepareOutboundConfirmation({ outboundId, deadline }));
+      }
       let candidate = null;
       let orderedSnapshot = null;
       if (requireOrderedSnapshot) {
