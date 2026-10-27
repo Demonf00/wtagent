@@ -120,6 +120,10 @@ shows the report path for startup, send-confirmation, and recovery failures.
 When ChatGPT truncates a collapsed long message, WTAgent expands the latest
 user message before verifying its send marker. Recovery checks the existing
 reply without automatically resending a message whose commit is uncertain.
+ChatGPT sends wait for an enabled Send button, including the modern composer
+layout. A click failure does not trigger a second submission through Enter.
+Structural reports also record whether Send is enabled and a draft is present,
+without including the draft text.
 
 Claude keeps the model selected by claude.ai in its browser profile; WTAgent does not override it.
 Gemini likewise keeps the model selected in its browser profile.
@@ -231,6 +235,8 @@ wtagent --model gemini --type music --once "生成一段舒缓钢琴纯音乐，
 ChatGPT 适配器支持新旧消息结构、临时会话地址和只保留部分消息节点的长对话。无法确认发送结果时，会保留会话供恢复。结构化诊断会记录识别到的页面结构、缺失的消息身份字段和发送阶段；启动、发送确认或恢复失败时，终端会显示诊断文件路径。
 
 ChatGPT 折叠长消息并截断页面文本时，WTAgent 会先展开最新的用户消息，再核对发送标记。恢复时会校验已有回复，不会自动重发提交状态不明的消息。
+
+发送时会等待发送按钮可用，并兼容新版 ChatGPT 输入框。点击失败后不会再补按 Enter 提交。结构化诊断还会记录发送按钮是否可用、输入框是否有草稿，不包含草稿内容。
 
 Claude 会沿用 claude.ai 在该浏览器 Profile 中选择的模型，WTAgent 不会自动切换模型。
 Gemini 同样沿用其浏览器 Profile 当前选择的模型。

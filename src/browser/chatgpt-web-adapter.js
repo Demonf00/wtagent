@@ -162,8 +162,36 @@ export class ChatGPTWebAdapter extends BaseWebAdapter {
   sendButtonLocators() {
     return [
       this.page.locator(CHATGPT_DOM.send),
-      this.page.getByRole("button", { name: /send|发送/i }),
+      this.page.locator(CHATGPT_DOM.sendModern),
+      this.page.getByRole("button", { name: /^(send|发送|傳送|送信|보내기|enviar|envoyer|senden)$/i }),
     ];
+  }
+
+  async submitComposer(_composer, { assertActive = () => {}, timeoutMs = this.sendConfirmationTimeoutMs() } = {}) {
+    // ProseMirror can expose the filled text before React enables/mounts Send.
+    // Enter during that interval may be ignored or edit the draft. Wait for
+    // the real control and make exactly one click; a failed click is ambiguous
+    // and must never fall through to an additional keyboard submission.
+    const deadline = this.monotonicNow() + timeoutMs;
+    while (this.monotonicNow() < deadline) {
+      assertActive();
+      const button = await firstVisible(this.sendButtonLocators());
+      assertActive();
+      if (button && await button.isEnabled().catch(() => false)) {
+        const remaining = deadline - this.monotonicNow();
+        assertActive();
+        if (remaining <= 0) break;
+        await button.click({ timeout: Math.max(1, Math.ceil(remaining)) });
+        return;
+      }
+      const remaining = deadline - this.monotonicNow();
+      if (remaining > 0) await this.waitForPoll(Math.min(100, remaining));
+    }
+    assertActive();
+    throw new BrowserAdapterError(
+      "ChatGPT did not expose an enabled Send control before the submission deadline.",
+      { code: "SEND_BUTTON_NOT_READY", recoverable: false },
+    );
   }
 
   stopButtonLocators() {

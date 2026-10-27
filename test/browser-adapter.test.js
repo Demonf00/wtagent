@@ -12,6 +12,45 @@ test("ChatGPT leaves model selection entirely to the website/user", () => {
   assert.equal(typeof adapter.selectMode, "undefined");
 });
 
+for (const scenario of ["late enabled button", "click failure", "deadline"]) {
+  test(`ChatGPT submission uses one ready button and no Enter fallback: ${scenario}`, async () => {
+    let now = 0;
+    let clicks = 0;
+    let presses = 0;
+    const button = {
+      async count() { return 1; },
+      nth() { return this; },
+      async isVisible() { return true; },
+      async isEnabled() { return scenario !== 'deadline' && now >= 200; },
+      async click() {
+        clicks++;
+        if (scenario === 'click failure') throw new Error('Click acknowledgement lost');
+      },
+    };
+    class ReadyAdapter extends ChatGPTWebAdapter {
+      monotonicNow() { return now; }
+      async waitForPoll(ms) { now += ms; }
+      sendButtonLocators() { return [button]; }
+    }
+    const adapter = new ReadyAdapter({ profileDir: '.' });
+    const submit = () => adapter.submitComposer({ async press() { presses++; } }, {
+      timeoutMs: 500,
+      assertActive() { assert.ok(now <= 500); },
+    });
+    if (scenario === 'late enabled button') {
+      await submit();
+      assert.equal(clicks, 1);
+    } else if (scenario === 'click failure') {
+      await assert.rejects(submit(), /Click acknowledgement lost/);
+      assert.equal(clicks, 1);
+    } else {
+      await assert.rejects(submit(), { code: 'SEND_BUTTON_NOT_READY' });
+      assert.equal(clicks, 0);
+    }
+    assert.equal(presses, 0);
+  });
+}
+
 test("classifies ChatGPT conversation URLs by restoration safety", () => {
   const adapter = new ChatGPTWebAdapter({ profileDir: "." });
 

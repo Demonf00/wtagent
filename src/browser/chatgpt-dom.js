@@ -16,6 +16,7 @@ export const CHATGPT_DOM = {
     { name: "main-contenteditable", selector: 'main div[contenteditable="true"]' },
   ],
   send: '[data-testid="send-button"]',
+  sendModern: 'form[data-chatgpt-composer] button[type="submit"]',
   stop: '[data-testid="stop-button"]',
   expandUserMessage: '[data-user-message-bubble] button[aria-expanded="false"][data-thread-find-skip="true"][data-markdown-copy="exclude"]',
 };
@@ -61,10 +62,18 @@ export function readChatGPTDom(input) {
     const visible = (element) => element.getClientRects().length > 0
       && getComputedStyle(element).visibility !== "hidden";
     const count = (selector) => [...document.querySelectorAll(selector)].filter(visible).length;
+    const sendControls = [...document.querySelectorAll(
+      [options.registry.send, options.registry.sendModern].filter(Boolean).join(', '),
+    )].filter(visible);
     snapshot.capabilities = {
       readyState: document.readyState,
       composers: options.registry.composers.filter(({ selector }) => count(selector) > 0).map(({ name }) => name),
-      sendButton: count(options.registry.send) > 0,
+      sendButton: sendControls.length > 0,
+      sendButtonEnabled: sendControls.some((element) => !element.disabled && element.getAttribute('aria-disabled') !== 'true'),
+      composerHasText: options.registry.composers.some(({ selector }) => (
+        [...document.querySelectorAll(selector)].some((element) => visible(element)
+          && String(element.value ?? element.innerText ?? element.textContent ?? '').trim().length > 0)
+      )),
       stopButton: count(options.registry.stop) > 0,
       placeholderCount: document.querySelectorAll('[id^="request-placeholder-"]').length,
       // Unknown suffixes are evidence of a renderer change, not valid messages.

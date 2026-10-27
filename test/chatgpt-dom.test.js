@@ -352,3 +352,64 @@ test("recovery reveals only the pending long user message and still requires its
     });
   }
 });
+
+test("modern ChatGPT waits for its enabled send control instead of pressing Enter", {
+  skip: process.env.WTAGENT_DOM_TESTS !== "1",
+}, async (t) => {
+  const browser = await chromium.launch({ executablePath: discoverChromeExecutable(), headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.route("**/*", route => route.fulfill({ contentType: "text/html", body: "<main></main>" }));
+  await page.goto("https://chatgpt.com/");
+  await page.setContent(`<main>
+    <form data-chatgpt-composer style="display:none"><div data-composer-markdown contenteditable="true" role="textbox"></div><button type="submit" aria-label="Send"></button></form>
+    <form data-chatgpt-composer><div data-composer-markdown contenteditable="true" role="textbox"></div><button type="submit" aria-label="Send" disabled></button></form>
+    <div id="history"></div></main>`);
+  await page.evaluate(({ response }) => {
+    window.submissions = 0;
+    window.enterPresses = 0;
+    const form = document.querySelectorAll('form')[1];
+    const composer = form.querySelector('[contenteditable]');
+    const send = form.querySelector('button');
+    composer.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { window.enterPresses++; e.preventDefault(); }
+    });
+    composer.addEventListener('input', () => {
+      send.disabled = true;
+      setTimeout(() => { send.disabled = false; }, 200);
+    });
+    form.addEventListener('submit', e => {
+      e.preventDefault();
+      window.submissions++;
+      history.pushState({}, '', '/c/send-readiness');
+      for (const [role, text] of [['user', composer.innerText], ['assistant', response]]) {
+        const row = document.createElement('section');
+        row.setAttribute('data-chatgpt-search-unit-key', `fallback-turn-0:0:${role}`);
+        row.setAttribute('data-chatgpt-search-message-ids', `${role}-new`);
+        row.textContent = text;
+        document.querySelector('#history').append(row);
+      }
+      composer.textContent = '';
+      send.disabled = true;
+    });
+  }, { response });
+  class FastAdapter extends ChatGPTWebAdapter {
+    restorationCorrelationWindowMs() { return 10; }
+    sendConfirmationTimeoutMs() { return 1500; }
+  }
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'wtagent-ready-send-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const adapter = new FastAdapter({ profileDir: path.join(directory, 'profile') });
+  adapter.page = page;
+  adapter.context = page.context();
+  adapter.cdpChrome = { targetId: 'ready-send-target' };
+  await adapter.startConversation();
+  const sent = await adapter.sendMessage(userText, { outboundId });
+  assert.equal(sent.userMessageId, 'user-new');
+  assert.equal(await page.evaluate(() => window.submissions), 1);
+  assert.equal(await page.evaluate(() => window.enterPresses), 0);
+  const report = await adapter.structuralDiagnostics();
+  assert.equal(report.capabilities.sendButton, true);
+  assert.equal(report.capabilities.sendButtonEnabled, false);
+  assert.equal(report.capabilities.composerHasText, false);
+});
