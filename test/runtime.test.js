@@ -3776,3 +3776,145 @@ test("recovers after a provider-side generation failure", async (t) => {
   assert.match(adapter.sentMessages[1], /generation failure \(server error\)/i);
   assertOneTrailingReminder(adapter.sentMessages[1]);
 });
+
+
+for (const scenario of ["policy-denied", "approval-denied"]) {
+  test(`rejected side-effect tool is never claimed as running (${scenario})`, async (t) => {
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), "wtagent-denied-tool-"));
+    const projectRoot = path.join(base, "project");
+    const sessionsDir = path.join(base, "sessions");
+    await fs.mkdir(projectRoot);
+    t.after(() => fs.rm(base, { recursive: true, force: true }));
+
+    const adapter = new FakeWebModelAdapter([
+      `<agent_response><done>false</done><message>Attempting a write.</message><tool_call name="fs.write"><args><path>must-not-write.txt</path><content>forbidden</content></args></tool_call></agent_response>`,
+      `<agent_response><done>true</done><message>Write was denied.</message></agent_response>`,
+    ]);
+    const session = await TaskSession.create({
+      sessionsDir,
+      task: "Try writing a file only if permitted",
+      projectRoot,
+      mode: null,
+    });
+    let approvalCalls = 0;
+    const events = [];
+    const policy = {
+      evaluate: async () => scenario === "policy-denied"
+        ? { action: "deny", reasons: ["test policy rejection"] }
+        : { action: "confirm", reasons: ["test approval required"] },
+    };
+    const runtime = new AgentRuntime({
+      adapter,
+      registry: createDefaultToolRegistry(),
+      policy,
+      session,
+      approval: async () => {
+        approvalCalls++;
+        return false;
+      },
+      onEvent: async (event) => {
+        events.push(event);
+        if (event.type === "tool.claimed") {
+          throw new Error("Rejected tool must not enter running state");
+        }
+      },
+    });
+
+    const result = await runtime.run();
+    assert.equal(result.message, "Write was denied.");
+    assert.equal(approvalCalls, scenario === "approval-denied" ? 1 : 0);
+    assert.equal(events.filter((event) => event.type === "tool.started").length, 0);
+    assert.equal(events.filter((event) => event.type === "tool.claimed").length, 0);
+    assert.equal(Object.keys(session.state.sideEffectTools).length, 0);
+    assert.equal(Object.keys(session.state.completedTools).length, 1);
+    assert.equal(session.state.pendingToolResult, null);
+    assert.match(adapter.sentMessages[1], /<tool_result name="fs\.write"/);
+    await assert.rejects(
+      fs.stat(path.join(projectRoot, "must-not-write.txt")),
+      { code: "ENOENT" },
+    );
+  });
+}
+
+
+for (const scenario of ["policy-denied", "approval-denied"]) {
+  test(`rejected side-effect result survives send crash without re-execution (${scenario})`, async (t) => {
+    const base = await fs.mkdtemp(path.join(os.tmpdir(), "wtagent-denied-recovery-"));
+    const projectRoot = path.join(base, "project");
+    const sessionsDir = path.join(base, "sessions");
+    await fs.mkdir(projectRoot);
+    t.after(() => fs.rm(base, { recursive: true, force: true }));
+
+    class CrashOnResultSendAdapter extends FakeWebModelAdapter {
+      async sendMessage(text) {
+        if (this.sentMessages.length === 1) {
+          this.lastSendStatus = "not-submitted";
+          throw new Error("simulated denial-result send crash");
+        }
+        return await super.sendMessage(text);
+      }
+    }
+
+    const adapter = new CrashOnResultSendAdapter([
+      `<agent_response><done>false</done><tool_call name="fs.write"><args><path>never.txt</path><content>unexpected</content></args></tool_call></agent_response>`,
+    ]);
+    const session = await TaskSession.create({
+      sessionsDir,
+      task: "Attempt a write with a denial",
+      projectRoot,
+      mode: null,
+    });
+    let initialApprovalCalls = 0;
+    const firstRuntime = new AgentRuntime({
+      adapter,
+      registry: createDefaultToolRegistry(),
+      policy: {
+        evaluate: async () => scenario === "policy-denied"
+          ? { action: "deny", reasons: ["denied by policy"] }
+          : { action: "confirm", reasons: ["approval required"] },
+      },
+      session,
+      approval: async () => {
+        initialApprovalCalls++;
+        return false;
+      },
+    });
+
+    await assert.rejects(firstRuntime.run(), /simulated denial-result send crash/);
+    assert.equal(initialApprovalCalls, scenario === "approval-denied" ? 1 : 0);
+    assert.equal(Object.keys(session.state.sideEffectTools).length, 0);
+    assert.equal(Object.keys(session.state.completedTools).length, 1);
+    assert.equal(session.state.pendingToolResult?.ok, false);
+    await assert.rejects(fs.stat(path.join(projectRoot, "never.txt")), { code: "ENOENT" });
+
+    const recovered = await TaskSession.load({ sessionsDir, taskId: session.taskId });
+    const recoveryAdapter = new FakeWebModelAdapter([
+      `<agent_response><done>true</done><message>Denial delivered after recovery.</message></agent_response>`,
+    ]);
+    recoveryAdapter.reconciliationOutcome = fakeReconciliationOutcome(
+      recovered.state.pendingAssistantTurn,
+    );
+    const recoveredRuntime = new AgentRuntime({
+      adapter: recoveryAdapter,
+      registry: createDefaultToolRegistry(),
+      policy: {
+        evaluate: async () => {
+          throw new Error("Recovery must not re-evaluate the denied tool");
+        },
+      },
+      session: recovered,
+      approval: async () => {
+        throw new Error("Recovery must not re-request approval");
+      },
+    });
+
+    const result = await recoveredRuntime.run({ resume: true });
+    assert.equal(result.message, "Denial delivered after recovery.");
+    assert.equal(recoveryAdapter.sentMessages.length, 1);
+    assert.match(recoveryAdapter.sentMessages[0], /<tool_result name="fs\.write"/);
+    assert.equal(Object.keys(recovered.state.sideEffectTools).length, 0);
+    assert.equal(Object.keys(recovered.state.completedTools).length, 1);
+    assert.equal(recovered.state.pendingToolResult, null);
+    await assert.rejects(fs.stat(path.join(projectRoot, "never.txt")), { code: "ENOENT" });
+  });
+}

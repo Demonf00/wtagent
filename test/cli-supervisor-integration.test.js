@@ -21,8 +21,20 @@ await fs.mkdir(workspace);
 const session = await AgentSession.create({
 sessionsDir, projectRoot: workspace, task: "opening instruction",
 });
-t.after(async () => fs.rm(home, { recursive: true, force: true }));
-return { home, workspace, sessionsDir, session };
+const supervisors = [];
+t.after(async () => {
+  try {
+    for (const supervisor of supervisors) {
+      await supervisor.close();
+    }
+  } finally {
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+return {
+  home, workspace, sessionsDir, session,
+  trackSupervisor: (supervisor) => supervisors.push(supervisor),
+};
 }
 
 async function waitFor(check, timeout = 4000) {
@@ -95,14 +107,14 @@ assert.equal(persisted.state.followUps.at(-1).instruction, "follow up");
 });
 
 test("Supervisor enqueues existing session without changing identity and serializes turns", async (t) => {
-const { home, workspace, sessionsDir, session } = await fixture(t);
+const { home, workspace, sessionsDir, session, trackSupervisor } = await fixture(t);
 const supervisor = new TaskSupervisor({
 dataDir: path.join(home, "supervisor"),
 sessionsDir, workspaces: [{ id: "cli", root: workspace }],
 autoRun: false, execute: async () => ({ message: "test" }),
 });
+trackSupervisor(supervisor);
 await supervisor.init();
-t.after(() => supervisor.close());
 const created = await supervisor.enqueueSessionTurn({
 workspaceId: "cli", sessionId: session.sessionId,
 instruction: "follow up", files: [],
@@ -117,7 +129,7 @@ assert.equal(supervisor.list().length, 1);
 });
 
 test("Supervisor retries never resend a turn after it entered runtime", async (t) => {
-const { home, workspace, sessionsDir, session } = await fixture(t);
+const { home, workspace, sessionsDir, session, trackSupervisor } = await fixture(t);
 await session.update({ runCount: 1, phase: "idle", lastMessage: "previous turn" });
 let calls = 0;
 const seen = [];
@@ -145,8 +157,8 @@ await running.update({ phase: "idle", pendingAssistantTurn: null, lastMessage: "
 return { message: "reconciled" };
 },
 });
+trackSupervisor(supervisor);
 await supervisor.init();
-t.after(() => supervisor.close());
 const record = await supervisor.enqueueSessionTurn({
 workspaceId: "cli", sessionId: session.sessionId,
 instruction: "new follow up", files: [{ name: "x", path: path.join(home, "x") }],
@@ -164,7 +176,7 @@ assert.deepEqual(seen[1].files, []);
 });
 
 test("Ambiguous follow-up without checkpoint blocks after one attempt", async (t) => {
-const { home, workspace, sessionsDir, session } = await fixture(t);
+const { home, workspace, sessionsDir, session, trackSupervisor } = await fixture(t);
 await session.update({ runCount: 1, phase: "idle", lastMessage: "old completion" });
 let calls = 0;
 const supervisor = new TaskSupervisor({
@@ -176,8 +188,8 @@ await running.update({ runCount: 2, phase: "interrupted" });
 throw Object.assign(new Error("uncertain"), { code: "WORKER_EXITED" });
 },
 });
+trackSupervisor(supervisor);
 await supervisor.init();
-t.after(() => supervisor.close());
 const created = await supervisor.enqueueSessionTurn({
 workspaceId: "cli", sessionId: session.sessionId, instruction: "dangerous follow up",
 });

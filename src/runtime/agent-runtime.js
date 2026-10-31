@@ -1972,6 +1972,20 @@ export class AgentRuntime {
             id: preparedCall.id,
             name: preparedCall.name,
           });
+        } else {
+          // A rejected side-effect tool never entered execution and therefore
+          // has no sideEffectTools claim. Its fingerprinted denial is still
+          // durable and must not trigger a new approval or execution on replay.
+          result = this.session.getToolResult(fingerprint);
+          if (result) {
+            await this.session.setPendingToolResult(result);
+            await this.emit("tool.reused", {
+              fingerprint,
+              id: preparedCall.id,
+              name: preparedCall.name,
+              reason: "previously-rejected",
+            });
+          }
         }
       } else if (!result) {
         result = this.session.getToolResult(fingerprint);
@@ -2021,7 +2035,11 @@ export class AgentRuntime {
         }
 
         this.control?.checkpoint();
-        if (sideEffect) {
+        // Claim only immediately before actual execution. Denied or rejected
+        // operations never ran; claiming them as "running" would falsely make
+        // an interruption look like an uncertain side effect.
+        const claimedSideEffect = Boolean(sideEffect && !result);
+        if (claimedSideEffect) {
           const claimEvent = await this.session.claimSideEffectTool(sideEffect);
           await this.onEvent?.(claimEvent);
         }
@@ -2083,7 +2101,7 @@ export class AgentRuntime {
           const completionEvent = await this.session.recordToolResult(
             fingerprint,
             result,
-            { identity: sideEffect },
+            { identity: claimedSideEffect ? sideEffect : null },
           );
           await this.onEvent?.(completionEvent);
         }
