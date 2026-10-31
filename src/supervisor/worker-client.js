@@ -2,9 +2,12 @@ import { fork } from "node:child_process";
 import { TaskStoppedError } from "./task-control.js";
 import { safeRuntimeEvent } from "./recovery-controller.js";
 
-function workerError(code) {
-  const error = new Error(code);
+function workerError(code, details = null) {
+  const error = new Error(typeof details?.message === "string" ? details.message : code);
   error.code = code;
+  if (typeof details?.name === "string") error.name = details.name;
+  if (typeof details?.stack === "string") error.stack = details.stack;
+  if (typeof details?.recoverable === "boolean") error.recoverable = details.recoverable;
   return error;
 }
 
@@ -44,6 +47,7 @@ export async function runWorkerProcess({
   let failure;
   let exited = false;
   let started = false;
+  let ready = false;
   let lastHeartbeat = Date.now();
   let lastProgress = Date.now();
   let invalidActions = 0;
@@ -74,6 +78,7 @@ export async function runWorkerProcess({
     send({ type: "control", reason: error.code === "TASK_CANCELLED" ? "cancel" : "pause" });
   });
   const heartbeatLimit = Math.max(15_000, settings.heartbeatMs * 4);
+  const readyTimeoutMs = Math.max(3_000, Math.min(15_000, settings.heartbeatMs * 3));
   const watchdog = setInterval(() => {
     if (exited) return;
     const time = Date.now();
@@ -81,6 +86,8 @@ export async function runWorkerProcess({
       // The control signal is cooperative, but Pause/Cancel cannot wait
       // indefinitely for a browser call which never returns.
       kill("WORKER_STOP_TIMEOUT");
+    } else if (!ready && time - lastHeartbeat > readyTimeoutMs) {
+      kill("WORKER_READY_TIMEOUT");
     } else if (time - lastHeartbeat > heartbeatLimit) {
       kill("WORKER_HEARTBEAT_TIMEOUT");
     } else if (!isWaitingApproval() && time - lastProgress > settings.progressTimeoutMs) {
@@ -106,6 +113,17 @@ export async function runWorkerProcess({
 
   child.on("message", (message) => {
     if (!message || typeof message !== "object") return;
+    if (message.type === "ready") {
+      if (ready || exited) return;
+      ready = true;
+      lastHeartbeat = Date.now();
+      started = send({
+        type: "start", sessionsDir, sessionId, workspaceRoot, instruction, files, options,
+        heartbeatMs: settings.heartbeatMs,
+      });
+      if (!started) kill("WORKER_IPC_FAILED");
+      return;
+    }
     if (message.type === "heartbeat") {
       lastHeartbeat = Date.now();
       return;
@@ -115,13 +133,20 @@ export async function runWorkerProcess({
       return;
     }
     if (message.type === "failure") {
-      const code = typeof message.code === "string" && SAFE_CODE.test(message.code)
-        ? message.code : "WORKER_ERROR";
-      failure = workerError(code);
+      const details = message.error ?? message;
+      const code = typeof details.code === "string" && SAFE_CODE.test(details.code)
+        ? details.code : "WORKER_ERROR";
+      failure = workerError(code, details);
       return;
     }
     if (message.type === "result") {
       result = message.result;
+      if (result?.error) {
+        const details = result.error;
+        const code = typeof details.code === "string" && SAFE_CODE.test(details.code)
+          ? details.code : "WORKER_ERROR";
+        result.error = workerError(code, details);
+      }
       return;
     }
     // Preserve message ordering so durable event/approval updates are
@@ -166,12 +191,8 @@ export async function runWorkerProcess({
     if (control.reason) {
       kill(control.reason === "cancel" ? "TASK_CANCELLED" : "TASK_PAUSED");
     } else {
-      started = send({
-        type: "start",
-        sessionsDir, sessionId, workspaceRoot, instruction, files, options,
-        heartbeatMs: settings.heartbeatMs,
-      });
-      if (!started) kill("WORKER_IPC_FAILED");
+      // The child announces readiness after installing its IPC listeners.
+      // Do not race a start message against child initialization.
     }
     await exitOutcome;
     // All arrived approval.required messages must first be registered.

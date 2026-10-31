@@ -18,6 +18,7 @@ class FakeChild extends EventEmitter {
     this.sent = [];
     this.kills = 0;
     this.onSend = onSend;
+    queueMicrotask(() => this.emit("message", { type: "ready" }));
   }
   send(message, callback) {
     this.sent.push(message);
@@ -129,4 +130,59 @@ test("worker crash cannot be mistaken for successful task completion", async () 
     if (message.type === "start") queueMicrotask(() => child.exit(1));
   });
   await assert.rejects(h.run, { code: "WORKER_EXITED" });
+});
+
+test("worker waits for ready handshake before sending start", async () => {
+  let child;
+  const control = new TaskControl();
+  const approvalProvider = new SupervisorApprovalProvider({ control, onRequired: async () => {} });
+  const run = runWorkerProcess({
+    sessionsDir: "/tmp/sessions", sessionId: "sess", workspaceRoot: "/tmp",
+    settings, control, approvalProvider,
+    forkProcess: () => {
+      child = new FakeChild((message, target) => {
+        if (message.type === "start") queueMicrotask(() => {
+          target.emit("message", { type: "result", result: { message: "ok" } });
+          target.exit(0);
+        });
+      });
+      return child;
+    },
+  });
+  assert.equal(child.sent.some((message) => message.type === "start"), false);
+  assert.equal((await run).message, "ok");
+  assert.equal(child.sent.filter((message) => message.type === "start").length, 1);
+});
+
+test("IPC failure preserves nonrecoverable marker", async () => {
+  const h = harness((message, child) => {
+    if (message.type !== "start") return;
+    queueMicrotask(() => {
+      child.emit("message", { type: "failure", error: {
+        code: "BROWSER_UNAVAILABLE", name: "BrowserAdapterError",
+        message: "Browser cannot start", recoverable: false,
+      } });
+      child.exit(1);
+    });
+  });
+  await assert.rejects(h.run, (error) =>
+    error.code === "BROWSER_UNAVAILABLE"
+    && error.recoverable === false
+    && error.name === "BrowserAdapterError");
+});
+
+test("result recovery errors retain nonrecoverable marker", async () => {
+  const h = harness((message, child) => {
+    if (message.type !== "start") return;
+    queueMicrotask(() => {
+      child.emit("message", { type: "result", result: {
+        message: null, recoveryRequired: true,
+        error: { code: "RECOVERY_UNAVAILABLE", recoverable: false },
+      } });
+      child.exit(0);
+    });
+  });
+  const result = await h.run;
+  assert.equal(result.error.code, "RECOVERY_UNAVAILABLE");
+  assert.equal(result.error.recoverable, false);
 });

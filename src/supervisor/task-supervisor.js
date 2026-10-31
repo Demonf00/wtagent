@@ -273,7 +273,7 @@ export class TaskSupervisor {
       });
       return;
     }
-    if (["STORAGE_UNSAFE", "BAD_REQUEST"].includes(error?.code)) {
+    if (error?.recoverable === false || ["STORAGE_UNSAFE", "BAD_REQUEST"].includes(error?.code)) {
       await this.#transition(record, "failed", {
         ...base, error: "NONRECOVERABLE_WORKER_ERROR",
       });

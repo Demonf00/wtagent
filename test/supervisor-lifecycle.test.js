@@ -172,3 +172,29 @@ test("Supervisor event log never stores streamed or tool-argument secrets", asyn
   assert.equal(events.some((event) => event.type === "model.streaming"), false);
   assert.equal(JSON.stringify(events).includes(secret), false);
 });
+
+test("explicitly nonrecoverable worker failure terminates without retry", async (t) => {
+  let calls = 0;
+  const f = await fixture(t, {
+    execute: async () => {
+      calls++;
+      throw Object.assign(new Error("configuration rejected"), {
+        code: "BROWSER_CONFIG_INVALID", recoverable: false,
+      });
+    },
+  });
+  const created = await f.supervisor.create({
+    workspaceId: "main", instruction: "must not retry",
+  });
+  const deadline = Date.now() + 5000;
+  let failed;
+  while (Date.now() < deadline) {
+    const record = f.supervisor.get(created.taskId);
+    if (record.status === "failed") { failed = record; break; }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.ok(failed, "task must fail rather than enter a retry loop");
+  assert.equal(failed.error, "NONRECOVERABLE_WORKER_ERROR");
+  assert.equal(failed.retries, 0);
+  assert.equal(calls, 1);
+});
