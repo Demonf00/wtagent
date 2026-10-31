@@ -21,6 +21,8 @@ export async function runWorkerProcess({
   sessionsDir,
   sessionId,
   workspaceRoot,
+  instruction = null,
+  files = [],
   options = {},
   settings,
   control,
@@ -166,7 +168,7 @@ export async function runWorkerProcess({
     } else {
       started = send({
         type: "start",
-        sessionsDir, sessionId, workspaceRoot, options,
+        sessionsDir, sessionId, workspaceRoot, instruction, files, options,
         heartbeatMs: settings.heartbeatMs,
       });
       if (!started) kill("WORKER_IPC_FAILED");

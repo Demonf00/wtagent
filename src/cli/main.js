@@ -28,6 +28,7 @@ import {
   collectDoctorReport,
 } from "../platform/windows-diagnostics.js";
 import { ConversationRunner, resolveRuntimePaths } from "../runtime/conversation-runner.js";
+import { executeSupervisorSession } from "./supervisor-session.js";
 import { AgentSession } from "../session/agent-session.js";
 import { PolicyEngine } from "../policy/policy-engine.js";
 import { ApprovalStore } from "../policy/approval-store.js";
@@ -530,6 +531,15 @@ async function runUpdate() {
   return result;
 }
 
+async function executeSelectedSession(args) {
+ if (args.options.legacy) return await executeSession(args);
+ return await executeSupervisorSession(args, {
+ interactive: isInteractiveSession(args.options),
+ readNextMessage: promptForNextMessage,
+ printResumeHint,
+ });
+}
+
 async function runAgent(taskParts, options) {
   assertNativeRuntimeSupported();
   const projectRoot = path.resolve(options.project ?? process.cwd());
@@ -602,7 +612,7 @@ async function runAgent(taskParts, options) {
     }
   }
 
-  return await executeSession({ session, options, files, chatInput });
+  return await executeSelectedSession({ session, options, files, chatInput });
 }
 
 function printChatBanner(projectRoot, provider) {
@@ -687,13 +697,14 @@ async function runResume(sessionId, instructionParts, options) {
         details: missing.map((m) => `${m.requested}: ${m.reason}`).join("; "),
       }));
     }
-    await session.appendInstruction(instruction, { files });
+    // Default Supervisor mode persists the follow-up after locking and checking any active task.
+ if (options.legacy) await session.appendInstruction(instruction, { files });
   }
 
-  return await executeSession({
-    session,
-    options,
-    resume: true,
+  return await executeSelectedSession({
+ session,
+ options,
+ resume: true,
     instruction: instruction || null,
     files,
   });
@@ -787,6 +798,7 @@ const program = new Command()
   .option("--model-turn-timeout-ms <milliseconds>", t("option.timeout"))
   .option("--no-minimize", t("option.noMinimize"))
   .option("--debug", t("option.debug"), false)
+ .option("--legacy", "Use direct ConversationRunner (debugging)", false)
   .argument("[task...]", t("argument.task"))
   .action(async (task, _, command) => {
     await runAgent(task, command.optsWithGlobals());

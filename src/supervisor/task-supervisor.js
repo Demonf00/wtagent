@@ -246,7 +246,15 @@ export class TaskSupervisor {
       return;
     }
 
-    const checkpoint = inspectCheckpoint(state);
+    let checkpoint = inspectCheckpoint(state);
+ if (Number.isSafeInteger(record.startRunCount)
+ && Number(state.runCount ?? 0) === record.startRunCount) {
+ checkpoint = state.phase === "idle" && !state.pendingOutbound
+ && !state.pendingAssistantTurn && !state.pendingAuxiliaryTurn
+ ? { action: "retry", reason: "TURN_NOT_STARTED" }
+ : checkpoint.action === "reconcile" ? checkpoint
+ : { action: "block", reason: "NO_SAFE_RECOVERY_CHECKPOINT" };
+ }
     const incident = incidentSummary({
       error, state, reason: checkpoint.reason,
       retries: record.retries ?? 0, workerHealth,
@@ -290,7 +298,55 @@ export class TaskSupervisor {
     }, "task.retry_scheduled");
   }
 
-  async create({ workspaceId, instruction, provider = DEFAULT_PROVIDER, idempotencyKey = null }) {
+  // CLI turns share a canonical AgentSession while retaining separate durable
+// Supervisor records for worker ownership and safe recovery.
+async enqueueSessionTurn({ workspaceId, sessionId, instruction = null, files = [] }) {
+if (!this.initialized || this.closed) throw fail("Supervisor is not active.");
+if (!WORKSPACE_ID.test(workspaceId ?? "") || !this.workspaces.has(workspaceId)) {
+throw fail("Unknown configured workspace.");
+}
+if (!/^[a-zA-Z0-9_-]+$/.test(sessionId ?? "")) throw fail("Invalid session ID.");
+if (instruction != null && (typeof instruction !== "string"
+|| Buffer.byteLength(instruction, "utf8") > 65536)) {
+throw fail("Invalid turn instruction.");
+}
+if (!Array.isArray(files) || files.some((file) =>
+!file || typeof file.name !== "string" || typeof file.path !== "string")) {
+throw fail("Invalid turn attachments.");
+}
+return this.#mutate(async () => {
+const workspaceRoot = this.workspaces.get(workspaceId);
+const session = await AgentSession.load({ sessionsDir: this.sessionsDir, sessionId });
+if (await fs.realpath(session.state.projectRoot) !== workspaceRoot) {
+throw fail("Session workspace mismatch.", "STORAGE_UNSAFE");
+}
+if ([...this.tasks.values()].some((item) => item.sessionId === sessionId
+&& !["completed", "cancelled", "failed", "blocked_uncertain", "paused"].includes(item.status))) {
+throw fail("Session already has an active Supervisor task.", "CONFLICT");
+}
+if ((session.state.pendingOutbound || session.state.pendingAssistantTurn
+|| session.state.pendingAuxiliaryTurn) && (instruction?.trim() || files.length)) {
+throw fail("Pending browser handoff requires a bare resume.", "CONFLICT");
+}
+const time = now();
+const record = {
+taskId: `task_${randomUUID()}`, sessionId, workspaceId, workspaceRoot,
+instruction: instruction ?? "", files: structuredClone(files),
+provider: session.state.provider ?? DEFAULT_PROVIDER, status: "queued",
+ startRunCount: Number(session.state.runCount ?? 0),
+createdAt: time, updatedAt: time, idempotencyKey: null,
+requestFingerprint: null, pendingApproval: null, result: null,
+error: null, lastEventSeq: 0, attempts: 0, retries: 0,
+retryAt: null, incident: null,
+};
+await this.#recordEvent(record, "task.created", { status: record.status });
+this.tasks.set(record.taskId, record);
+this.#kick();
+return serializable(record);
+});
+}
+
+async create({ workspaceId, instruction, provider = DEFAULT_PROVIDER, idempotencyKey = null }) {
     if (!this.initialized || this.closed) throw fail("Supervisor is not active.");
     if (!WORKSPACE_ID.test(workspaceId ?? "") || !this.workspaces.has(workspaceId)) {
       throw fail("Unknown configured workspace.");
@@ -329,6 +385,7 @@ export class TaskSupervisor {
         instruction,
         provider: providerId,
         status: "queued",
+        startRunCount: 0,
         createdAt: time,
         updatedAt: time,
         idempotencyKey,
@@ -436,7 +493,8 @@ export class TaskSupervisor {
       if (session.state.projectRoot !== record.workspaceRoot) {
         throw fail("Session workspace no longer matches the configured workspace.", "STORAGE_UNSAFE");
       }
-      if (session.state.phase === "idle" && session.state.lastMessage
+      if (!record.instruction && !(record.files?.length)
+ && session.state.phase === "idle" && session.state.lastMessage
           && session.state.runCount > 0 && !session.state.pendingOutbound
           && !session.state.pendingAssistantTurn && !session.state.pendingAuxiliaryTurn) {
         await this.#mutate(() => this.#transition(record, "completed", {
@@ -461,6 +519,12 @@ export class TaskSupervisor {
           sessionsDir: this.sessionsDir,
           sessionId: record.sessionId,
           workspaceRoot: record.workspaceRoot,
+          instruction: Number.isSafeInteger(record.startRunCount)
+           && Number(session.state.runCount ?? 0) > record.startRunCount
+           ? null : record.instruction || null,
+          files: Number.isSafeInteger(record.startRunCount)
+           && Number(session.state.runCount ?? 0) > record.startRunCount
+           ? [] : record.files ?? [],
           options: this.options,
           settings: this.recoverySettings,
           control, approvalProvider, onEvent,
@@ -468,6 +532,9 @@ export class TaskSupervisor {
           onStart: (pid) => {
             if (this.current?.taskId === record.taskId) {
               this.current.workerPid = pid;
+// Retained in the next durable task transition; proves a real
+// worker subprocess was started without storing model content.
+record.workerPid = pid;
             }
           },
         })
@@ -475,6 +542,12 @@ export class TaskSupervisor {
           session,
           options: this.options,
           resume: session.state.runCount > 0,
+          instruction: Number.isSafeInteger(record.startRunCount)
+           && Number(session.state.runCount ?? 0) > record.startRunCount
+           ? null : record.instruction || null,
+          files: Number.isSafeInteger(record.startRunCount)
+           && Number(session.state.runCount ?? 0) > record.startRunCount
+           ? [] : record.files ?? [],
           approvalProvider,
           control,
           renderer: quietRenderer(),

@@ -80,6 +80,8 @@ async function run(message) {
       session,
       options: message.options ?? {},
       resume: session.state.runCount > 0,
+      instruction: message.instruction ?? null,
+      files: message.files ?? [],
       control,
       approvalProvider: { request: requestApproval },
       renderer: quietRenderer(),
