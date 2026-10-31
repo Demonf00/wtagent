@@ -2,7 +2,7 @@
 
 ## Decision
 
-The model is the developer/planner: it reads the GitHub repository, writes reviewed code changes as PRs, and evaluates verification feedback. Local WTAgent is the executor/verifier: it runs commands, browser/desktop automation, checks, and machine-readable reports on Windows. GitHub stores the durable task and revision identity between the two.
+The model is the developer/planner: it reads the GitHub repository, writes reviewed code changes as PRs, and evaluates verification feedback. Local WTAgent is the executor/verifier: it runs commands, browser/desktop automation, checks, and machine-readable reports on Windows. GitHub stores the durable task and revision identity between the two. GitHub Issues are currently disabled in this repository, so the first persistent task backlog is docs/autonomy-tasks.json; Issues may be used if enabled later.
 
 Never require the running Supervisor to rebuild or validate its own replacement binary. Local verification runs in a separate Node process, using an unprivileged OS account.
 
@@ -11,7 +11,7 @@ Never require the running Supervisor to rebuild or validate its own replacement 
 | Component | Owns | Must not own |
 | --- | --- | --- |
 | Developer model | Goal decomposition, patch, PR, tests, next patch | Claiming Windows commands ran without evidence |
-| GitHub | Issue spec, PR SHA, review, verification comments | Secrets, browser profiles or raw device logs |
+| GitHub | Versioned task manifests, PR SHA, review, verification comments (Issues optional) | Secrets, browser profiles or raw device logs |
 | PR watcher | Poll approved PRs, verify exact new SHA once, checkpoint, report | Merging, releasing, browser login or auto-upgrading |
 | Local Supervisor | Worker lifetime, retries, tool orchestration, cancellation, checkpoints | Autonomous security exceptions or model decisions |
 | Verifier | Syntax/unit/integration/Windows tests, package dry-run; approved live smoke | Auto-approving its own code |
@@ -48,6 +48,8 @@ The initial watcher polls at a minimum 15-second interval. Label scanning curren
 
 ## Development state machine
 
+The canonical initial task registry is docs/autonomy-tasks.json, rather than GitHub Issues (disabled in this repository). Its entries define ID, dependency graph, owner, risk and acceptance checks; no runtime consumes or updates it automatically yet.
+
 - TODO: acceptance criteria written
 - READY: approved scope and dependency order
 - IN_PROGRESS: developer implements
@@ -57,7 +59,7 @@ The initial watcher polls at a minimum 15-second interval. Label scanning curren
 - ACCEPTED: human accepts risk, merges or releases
 - BLOCKED: missing environment/credentials/ambiguous action
 
-The next independent issue may start after the previous one is VERIFIED, but must not silently ACCEPT, merge or deploy changes.
+The next independent task may start after the previous one is VERIFIED, but must not silently ACCEPT, merge or deploy changes.
 
 Each planner task must include observable outcome and artifacts, allowed workspace/tools, reproduction, acceptance checks including negative case, bounded budgets, dependencies, risk category and whether approval is required.
 
