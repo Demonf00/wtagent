@@ -90,6 +90,10 @@ function formatSupervisorIncident(task) {
       && incident.code !== status) {
     details.push(`cause=${incident.code}`);
   }
+  if (incident?.code === "BROWSER_ACCESS_CHALLENGE"
+      && ["URL", "DOM", "TITLE", "BODY"].includes(incident.challengeEvidence)) {
+    details.push(`evidence=${incident.challengeEvidence}`);
+  }
   if (incident?.reason && incident.reason !== "UNCLASSIFIED"
       && incident.reason !== status) {
     details.push(`checkpoint=${incident.reason}`);
