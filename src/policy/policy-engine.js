@@ -10,6 +10,7 @@ const PATH_FIELDS = Object.freeze({
   "terminal.exec": ["cwd"],
   "process.start": ["cwd"],
   "image.generate": ["output_path", "reference_images"],
+  "browser.screenshot": ["path"],
 });
 
 const PRIVILEGED_PROGRAMS = new Set(["sudo", "su", "doas", "runas"]);
@@ -266,6 +267,9 @@ export class PolicyEngine {
     }
 
     const reasons = commandReasons(toolCall.name, toolCall.args);
+    if (["browser.navigate", "browser.click", "browser.fill"].includes(toolCall.name)) {
+      reasons.push("browser interaction may trigger local application side effects");
+    }
     let allowOutside = false;
 
     for (const field of PATH_FIELDS[toolCall.name] ?? []) {

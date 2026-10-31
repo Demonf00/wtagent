@@ -10,6 +10,7 @@ import {
   resolveToolPath,
 } from "../policy/path-guard.js";
 import { ToolRegistry } from "./registry.js";
+import { registerBrowserTools } from "./browser-tools.js";
 import { runProgram } from "./terminal-exec.js";
 import { resolveLaunchPlan } from "../platform/command-launcher.js";
 import {
@@ -625,5 +626,6 @@ export function createDefaultToolRegistry({
     });
   }
 
+  registerBrowserTools(registry);
   return registry;
 }
