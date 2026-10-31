@@ -266,11 +266,25 @@ export class ConversationRunner {
 }
 
 
-export async function executeConversationTurn({ session, options = {}, resume = false, instruction = null, files = [], approvalProvider, onEvent, control, adapter, renderer }) {
-  const runner = new ConversationRunner({ session, options, interactive: false, approvalProvider, onEvent, control, adapter, renderer });
+export async function executeConversationTurn({
+  session, options = {}, resume = false, instruction = null, files = [],
+  approvalProvider, onEvent, control, adapter, renderer,
+  createRunner = (config) => new ConversationRunner(config),
+}) {
+  const runner = createRunner({
+    session, options, interactive: false, approvalProvider, onEvent, control, adapter, renderer,
+  });
   try {
     return await runner.runTurn({ resume, instruction, files });
   } finally {
-    await runner.close({ keepBrowser: false });
+    // A failed/incomplete Worker turn may have already sent a web message.
+    // Its exact Chrome target MUST survive the worker so a replacement can
+    // reconcile the persisted handoff without submitting the message again.
+    // close() on an ordinary CDP connection shuts Chrome down entirely;
+    // detach() leaves Chrome and its target alive and releases the profile lock.
+    const state = session.state;
+    const keepBrowser = Boolean(state.pendingOutbound
+      || state.pendingAssistantTurn || state.pendingAuxiliaryTurn);
+    await runner.close({ keepBrowser });
   }
 }
