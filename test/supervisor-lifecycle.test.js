@@ -198,3 +198,36 @@ test("explicitly nonrecoverable worker failure terminates without retry", async 
   assert.equal(failed.retries, 0);
   assert.equal(calls, 1);
 });
+
+test("browser access challenge during pending assistant handoff is never retried automatically", async (t) => {
+  let calls = 0;
+  const f = await fixture(t, {
+    execute: async ({ session }) => {
+      calls++;
+      await session.update({
+        phase: "waiting_model", runCount: 1,
+        conversationTargetId: "saved-tab",
+        pendingAssistantTurn: {
+          handoffId: "outbound:one", sourceOutboundId: "one",
+          conversationTargetId: "saved-tab", status: "waiting",
+        },
+      });
+      throw Object.assign(new Error("Browser access challenge detected."), {
+        code: "BROWSER_ACCESS_CHALLENGE", recoverable: false,
+      });
+    },
+  });
+  const created = await f.supervisor.create({
+    workspaceId: "main", instruction: "test challenge pause",
+  });
+  const failed = await waitFor(() => {
+    const task = f.supervisor.get(created.taskId);
+    return task.status === "failed" && task;
+  });
+  assert.equal(failed.error, "NONRECOVERABLE_WORKER_ERROR");
+  assert.equal(failed.incident.code, "BROWSER_ACCESS_CHALLENGE");
+  assert.equal(failed.incident.reason, "PENDING_ASSISTANT_TURN");
+  assert.equal(failed.retries, 0);
+  assert.equal(failed.attempts, 1);
+  assert.equal(calls, 1);
+});
