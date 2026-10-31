@@ -293,4 +293,4 @@ To send a **public** test summary to that PR for the remote developer to review,
 node scripts/verify-pr.js --pr 5 --post-comment
 ```
 
-The PR comment includes only the candidate SHA, OS/Node version and check counts; raw logs and browser data stay local. Live authenticated browser smoke is **not run automatically** and requires separate approval. Passing automated checks is not proof that the ChatGPT browser session works.
+The PR comment includes only the candidate SHA, OS/Node version and check counts; raw logs and browser data stay local. Live authenticated browser smoke is **not run automatically** and requires separate approval. Passing automated checks is not proof that the ChatGPT browser session works. A disposable worktree isolates Git files, **not the OS process**: tests execute PR code with your Windows user permissions, so only verify candidates you trust and never run this as Administrator.
