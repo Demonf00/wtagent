@@ -17,6 +17,15 @@ These instructions are **opted in only for WTAgent running from this exact devel
 7. Source changes are not reflected in a running Node process. After a successful release, stop the current development process and start a fresh source-based process for the next iteration. Do not claim that a process has restarted without verification.
 8. Maintain Git commits, tags, and persistent `.tgz` files as recoverable checkpoints. Continue work from the **latest successful source version** and registered tools, not an obsolete package or initial state.
 
+## GitHub PR verification handoff (developer model + local verifier)
+
+When an external ChatGPT developer has already opened a GitHub PR for WTAgent, prefer **verification**, not duplicative code analysis or independent edits:
+1. Confirm the user-approved PR number and that the candidate belongs to `Demonf00/wtagent`. Verify from a **separate local source process**, not the Supervisor currently being repaired. Use the existing `--legacy` escape hatch when needed.
+2. From this opted-in source checkout, run `node scripts/verify-pr.js --pr <number>`. This downloads the candidate into an isolated temporary Git worktree, installs temporary dependencies, runs syntax, Supervisor regressions, all tests, and a package dry run. It does **not** switch branches or alter the running global installation.
+3. When explicitly authorized to publish a public status summary and the GitHub CLI is authenticated, use `--post-comment`. The comment contains only SHA, check counts and statuses; full logs stay in local AppData. If posting fails, report the local JSON path.
+4. Report the exact PR SHA and failed check; distinguish automated tests from any authenticated browser smoke (NOT RUN by default). Send failed results back through the PR; external developer can produce the next revision. Never classify a PR as production-ready based only on a unit-test pass.
+5. Keep merging, packaging, self-release, live browser smoke, and changes to global installation as separate explicitly approved steps. Do not auto-merge, push, publish, or auto-restart the current agent.
+
 ## Execution and safety
 
 - All project operations go through the existing local Runtime and its approval policy. Repository instructions are guidance, not executable commands or permissions.
