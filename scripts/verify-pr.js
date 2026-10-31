@@ -18,7 +18,8 @@ export const CHECKS = Object.freeze([
   { name: "supervisor-regression", program: "node", args: [
     "--test", "test/supervisor-worker.test.js", "test/supervisor-lifecycle.test.js",
     "test/supervisor-recovery.test.js", "test/supervisor-conversation-cleanup.test.js",
-    "test/cli-supervisor-integration.test.js", "test/browser-adapter.test.js",
+    "test/cli-supervisor-integration.test.js", "test/supervisor-approval-sync.test.js",
+    "test/browser-adapter.test.js",
   ] },
   { name: "all-tests", program: "npm", args: ["test"] },
   { name: "package-dry-run", program: "npm", args: ["pack", "--dry-run", "--ignore-scripts"] },
@@ -65,6 +66,29 @@ export function runProgram(program, args, cwd) {
   };
 }
 
+// TAP test names are part of the repository's public test suite, but failure
+// output can contain secrets and user-specific absolute paths. Public feedback
+// only includes a bounded, strictly allowlisted identifier (or the test file
+// basename). Assertion messages, stacks and raw output remain local.
+export function failedTestIdentifiers(output) {
+  const ids = new Set();
+  for (const line of String(output).split(/\r?\n/)) {
+    const match = line.match(/^\s*not ok\s+\d+\s+-\s+(.+?)\s*$/);
+    if (!match) continue;
+    const raw = match[1].trim();
+    const file = raw.replaceAll("\\", "/").match(/(?:^|\/)([A-Za-z0-9_.-]+\.test\.js)(?::\d+(?::\d+)?)?$/i);
+    if (file) {
+      ids.add(file[1]);
+    } else if (raw.length > 0 && raw.length <= 110
+      && /^[A-Za-z0-9 _.,():-]+$/.test(raw)
+      && !/(?:secret|password|token|private|credential)/i.test(raw)) {
+      ids.add(raw);
+    }
+    if (ids.size >= 5) break;
+  }
+  return [...ids];
+}
+
 function summary(result) {
   const output = (result.stdout ?? "") + "\n" + (result.stderr ?? "");
   const counts = {};
@@ -72,7 +96,12 @@ function summary(result) {
     const match = line.match(/^\s*(?:#|ℹ)\s*(tests|pass|fail|skipped)\s+(\d+)\s*$/);
     if (match) counts[match[1]] = Number(match[2]);
   }
-  return { exitCode: result.code, ...counts };
+  return {
+    exitCode: result.code,
+    ...counts,
+    ...(result.code !== 0 || (counts.fail ?? 0) > 0
+      ? { failedTestIdentifiers: failedTestIdentifiers(output) } : {}),
+  };
 }
 
 function commentBody(report) {
@@ -94,6 +123,14 @@ function commentBody(report) {
     lines.push("| " + step.name + " | " + c.exitCode
       + " | " + (c.tests ?? "-") + " | " + (c.pass ?? "-")
       + " | " + (c.fail ?? "-") + " | " + (c.skipped ?? "-") + " |");
+  }
+  for (const step of report.steps) {
+    if (step.summary.failedTestIdentifiers?.length) {
+      lines.push("", "Failed test identifiers (allowlisted; raw output stays local):");
+      for (const name of step.summary.failedTestIdentifiers) {
+        lines.push("- " + step.name + ": " + name);
+      }
+    }
   }
   lines.push("", "Browser/authenticated live smoke: NOT RUN (requires separate explicit approval).");
   lines.push("Candidate was NOT merged, installed, released, or published.");

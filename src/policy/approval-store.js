@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import { replaceFileAtomic } from "../shared/atomic-write.js";
 
-// Persisted "always allow" decisions made at the approval prompt. Lives in the
-// app data directory so it survives session resumes and new sessions.
+// Persisted "always allow" decisions made at the approval prompt. The file
+// lives inside one saved Session: grants survive turns, Worker restarts and
+// session resume, but must not carry into a different Session.
 export class ApprovalStore {
   constructor({ filePath }) {
     this.filePath = filePath;
@@ -12,28 +13,33 @@ export class ApprovalStore {
   }
 
   async ensureLoaded() {
-    if (this.loaded) {
-      return;
-    }
+    if (this.loaded) return;
     this.loaded = true;
     try {
       const parsed = JSON.parse(await fs.readFile(this.filePath, "utf8"));
-      if (parsed?.allowAll === true) {
-        this.allowAll = true;
-      }
+      if (parsed?.allowAll === true) this.allowAll = true;
       for (const name of parsed?.toolNames ?? []) {
-        if (typeof name === "string" && name) {
-          this.toolNames.add(name);
-        }
+        if (typeof name === "string" && name) this.toolNames.add(name);
       }
     } catch (error) {
-      // A missing or unreadable file simply means no saved approvals. Anything
-      // beyond ENOENT is treated as corrupt and ignored rather than crashing.
+      // Keep the legacy load semantics: an in-memory grant set before the
+      // initial read is valid. Corrupt existing files fail closed.
       if (error.code !== "ENOENT") {
         this.toolNames.clear();
         this.allowAll = false;
       }
     }
+  }
+
+  // The parent Supervisor CLI is a different process. A Worker that has
+  // already loaded approvals.json will otherwise keep an outdated cache.
+  // Explicit reload replaces cached grants (including when a persisted grant
+  // was removed or became unreadable); do not change normal ensureLoaded.
+  async reload() {
+    this.loaded = false;
+    this.toolNames.clear();
+    this.allowAll = false;
+    await this.ensureLoaded();
   }
 
   isAlwaysAllowed(toolName) {

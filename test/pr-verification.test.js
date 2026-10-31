@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
-  parseArgs, verifyPullRequest, REPOSITORY,
+  parseArgs, verifyPullRequest, failedTestIdentifiers, REPOSITORY,
 } from "../scripts/verify-pr.js";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
@@ -152,4 +152,51 @@ test("expected SHA is validated before accessing GitHub", async (t) => {
     run: fake.run, log() {},
   }), /Expected PR SHA/);
   assert.equal(fake.calls.length, 0);
+});
+
+
+test("TAP failure identifiers exclude filesystem paths and private output", () => {
+  const output = [
+    "not ok 17 - C:\\Users\\archi\\secret-project\\test\\approval.test.js:77",
+    "  error: actual password=ABCD123",
+    "  stack: token=MY_SECRET_CREDENTIAL",
+    "not ok 18 - safe test name",
+    "not ok 19 - password=SECRET",
+    "not ok 20 - https://example.com/private",
+  ].join("\n");
+  assert.deepEqual(failedTestIdentifiers(output), [
+    "approval.test.js", "safe test name",
+  ]);
+});
+
+test("GitHub PR feedback includes bounded failing test identifiers, never raw failure output", async (t) => {
+  const { root, reports } = await fixture(t);
+  const fake = fakeRun(root);
+  const secret = "PRIVATE_SECRET_TEST_OUTPUT_998877";
+  const run = (program, args, cwd) => {
+    if (program === "npm" && args[0] === "test") {
+      return {
+        code: 1,
+        stdout: [
+          "not ok 13 - C:\\Users\\archi\\test\\approval.test.js",
+          "  error: " + secret,
+          "# tests 4", "# pass 3", "# fail 1", "# skipped 0",
+        ].join("\n"),
+        stderr: "provider text: " + secret,
+      };
+    }
+    return fake.run(program, args, cwd);
+  };
+  const report = await verifyPullRequest({
+    pr: 12, postComment: true, root, reportRoot: reports, run,
+    checks: [{ name: "all-tests", program: "npm", args: ["test"] }],
+    log() {},
+  });
+  assert.equal(report.ok, false);
+  assert.deepEqual(report.steps[0].summary.failedTestIdentifiers, ["approval.test.js"]);
+  const body = fake.calls.find((item) => item.program === "gh")
+    .args.find((arg) => arg.startsWith("body="));
+  assert.match(body, /Failed test identifiers/);
+  assert.match(body, /approval\.test\.js/);
+  assert.doesNotMatch(body, /PRIVATE_SECRET_TEST_OUTPUT_998877|Users|archi/);
 });
