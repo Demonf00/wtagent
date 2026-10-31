@@ -6,6 +6,7 @@ import os from "node:os";
 import { spawnSync } from "node:child_process";
 import { gunzipSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
+import { resolveLaunchPlan } from "../src/platform/command-launcher.js";
 
 export const DEFAULT_UPGRADE_FILES = [
   "AGENTS.md",
@@ -42,13 +43,17 @@ const CHECKS = [
 ];
 
 export function runProgram(cmd, args, cwd) {
-  const result = spawnSync(cmd, args, {
+  // Reuse WTAgent's tested Windows .cmd launch planner. Never let Node
+  // concatenate unescaped arguments into shell:true command strings.
+  const plan = resolveLaunchPlan({ program: cmd, argv: args, cwd });
+  const result = spawnSync(plan.command, plan.args, {
     cwd,
     encoding: "utf8",
     timeout: 180000,
     maxBuffer: 32 * 1024 * 1024,
     windowsHide: true,
-    shell: process.platform === "win32" && ["npm", "npm.cmd"].includes(cmd),
+    shell: false,
+    windowsVerbatimArguments: plan.windowsVerbatimArguments === true,
   });
   if (result.error) return { code: -1, stdout: "", stderr: result.error.message };
   return {
