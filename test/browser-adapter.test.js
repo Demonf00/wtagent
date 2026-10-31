@@ -386,7 +386,9 @@ test("visible challenge UI still triggers blocked-page detection", async () => {
       timeoutMs: 100,
       stableWindowMs: 0,
     }),
-    /Browser access challenge detected/,
+    (error) => error.code === "BROWSER_ACCESS_CHALLENGE"
+      && error.recoverable === false
+      && /Browser access challenge detected/.test(error.message),
   );
 });
 
@@ -415,7 +417,8 @@ test("a localized challenge page with no composer is detected via body text", as
 
   await assert.rejects(
     adapter.throwIfBlockedPage(),
-    /Browser access challenge detected/,
+    (error) => error.code === "BROWSER_ACCESS_CHALLENGE"
+      && error.recoverable === false,
   );
 });
 
