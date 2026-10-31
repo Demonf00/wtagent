@@ -3329,7 +3329,10 @@ export class BaseWebAdapter {
     // A CAPTCHA/challenge needs the user's eyes and hands — surface the window
     // if it was minimized before reporting the block.
     await this.restoreWindow();
-    throw new BrowserAdapterError("Browser access challenge detected.");
+    throw new BrowserAdapterError(
+      "Browser access challenge detected. Complete the verification in the preserved Chrome window before resuming; the pending message must not be resent.",
+      { code: "BROWSER_ACCESS_CHALLENGE", recoverable: false },
+    );
   }
 
   hasStructuralDiagnostics() {
