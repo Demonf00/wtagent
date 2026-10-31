@@ -13,33 +13,32 @@ export class ApprovalStore {
 
   async ensureLoaded() {
     if (this.loaded) return;
-    await this.reload();
-  }
-
-  // Supervisor CLI persists decisions in a *different* process. The Worker
-  // may already have loaded this store before requesting approval, so it must
-  // explicitly reload after the parent replies. Do not merge old grants:
-  // revocations and corrupt/missing files must fail closed.
-  async reload() {
-    let names = new Set();
-    let allowAll = false;
+    this.loaded = true;
     try {
       const parsed = JSON.parse(await fs.readFile(this.filePath, "utf8"));
-      if (!parsed || typeof parsed !== "object"
-          || (parsed.toolNames != null && !Array.isArray(parsed.toolNames))) {
-        throw new Error("Invalid approvals file");
+      if (parsed?.allowAll === true) this.allowAll = true;
+      for (const name of parsed?.toolNames ?? []) {
+        if (typeof name === "string" && name) this.toolNames.add(name);
       }
-      allowAll = parsed.allowAll === true;
-      names = new Set((parsed.toolNames ?? []).filter((name) =>
-        typeof name === "string" && name.length > 0));
-    } catch {
-      // ENOENT, malformed JSON, or unreadable file all mean no durable grant.
-      names = new Set();
-      allowAll = false;
+    } catch (error) {
+      // Keep the legacy load semantics: an in-memory grant set before the
+      // initial read is valid. Corrupt existing files fail closed.
+      if (error.code !== "ENOENT") {
+        this.toolNames.clear();
+        this.allowAll = false;
+      }
     }
-    this.toolNames = names;
-    this.allowAll = allowAll;
-    this.loaded = true;
+  }
+
+  // The parent Supervisor CLI is a different process. A Worker that has
+  // already loaded approvals.json will otherwise keep an outdated cache.
+  // Explicit reload replaces cached grants (including when a persisted grant
+  // was removed or became unreadable); do not change normal ensureLoaded.
+  async reload() {
+    this.loaded = false;
+    this.toolNames.clear();
+    this.allowAll = false;
+    await this.ensureLoaded();
   }
 
   isAlwaysAllowed(toolName) {
