@@ -31,6 +31,16 @@ export function resolveRuntimePaths(options, providerId = DEFAULT_PROVIDER) {
   };
 }
 
+// Supervisor CLI runs in the parent process and writes approvals.json there.
+// The Worker caches ApprovalStore on its first policy evaluation. Refresh after
+// each parent decision so an "always allow" choice takes effect *during* this
+// Worker run, not only on the next CLI turn or process restart.
+export async function requestSupervisorApproval({ approvalProvider, approvalStore, toolCall, reasons }) {
+  const approved = await approvalProvider.request({ toolCall, reasons });
+  await approvalStore.reload();
+  return approved;
+}
+
 // Owns the browser adapter, process manager, and renderer for the lifetime of
 // one conversation. A single instance drives many turns: the first turn boots
 // the session, and each later turn reuses the same open Chrome tab and session
@@ -113,7 +123,13 @@ export class ConversationRunner {
           : null
       ),
       approval: async ({ toolCall, reasons }) => {
-        if (this.approvalProvider) return await this.approvalProvider.request({ toolCall, reasons });
+        if (this.approvalProvider) {
+          return await requestSupervisorApproval({
+            approvalProvider: this.approvalProvider,
+            approvalStore: this.approvalStore,
+            toolCall, reasons,
+          });
+        }
         if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
         this.renderer.stopSpinner();
         console.log(
