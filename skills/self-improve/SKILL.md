@@ -16,6 +16,15 @@ This skill applies **only** when the runtime has positively identified its own o
 3. Establish baseline with `npm test` and `npm run check`. Record failures and skips separately. Reuse registered tools instead of duplicating capabilities. Never reset to the original repository.
 4. Distinguish `node .\src\cli\main.js` (development source) from global `wtagent` (independent installed snapshot).
 
+## Verify external GitHub PRs instead of editing locally
+
+If another developer (including the connected ChatGPT GitHub session) submitted a PR, the local WTAgent should act as an independent verifier:
+- Confirm PR number. Run `node scripts/verify-pr.js --pr NUMBER` from this opted-in source checkout; this checks a disposable worktree without switching local branches.
+- If the user explicitly approved a **public summary** on the PR and `gh auth status` is usable, add `--post-comment`. Do not post raw logs, secrets, browser profiles, screenshots, or model transcripts.
+- Focus on Windows-native behavior unavailable to the cloud GitHub editor. Perform a live signed-in browser smoke **only** under separate user approval and safe test instructions. Automated tests and real browser smoke are different evidence.
+- Report PASS/FAIL with SHA and any skipped checks, then stop. Do **not** invoke self-release, install globally, or merge unless user separately authorizes.
+- A failed candidate is a request for the external developer to fix the PR; do not start modifying arbitrary local files in response.
+
 ## Implement
 
 1. Modify actual source files and add regression tests for all new capabilities and permission boundaries.
