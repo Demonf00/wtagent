@@ -31,16 +31,17 @@ async function fixture(t) {
 
 test("watcher requires explicit one-PR or one-label scope", () => {
   assert.deepEqual(parseWatchArgs(["--pr", "13", "--post-comment", "--once"]), {
-    pr: 13, label: null, postComment: true, once: true, intervalSeconds: 60,
+    pr: 13, label: null, postComment: true, once: true, intervalSeconds: 60, syncAfterMerge: false,
   });
   assert.deepEqual(parseWatchArgs(["--label", "wtagent-verify", "--interval-seconds", "15"]), {
-    pr: null, label: "wtagent-verify", postComment: false, once: false, intervalSeconds: 15,
+    pr: null, label: "wtagent-verify", postComment: false, once: false, intervalSeconds: 15, syncAfterMerge: false,
   });
   for (const input of [
     [], ["--pr", "0"], ["--pr", "1;whoami"], ["--label", "../../etc"],
     ["--pr", "13", "--label", "test"], ["--pr", "13", "--pr", "14"],
     ["--pr", "13", "--interval-seconds", "0"], ["--pr", "13", "--interval-seconds", "3601"],
     ["--pr", "13", "--post-comment", "--post-comment"],
+    ["--pr", "13", "--sync-after-merge", "--sync-after-merge"],
   ]) assert.throws(() => parseWatchArgs(input), input.join(" "));
 });
 
@@ -149,4 +150,23 @@ test("CLI watcher bounded once mode performs one cycle", async () => {
     pr: 13, once: true, intervalSeconds: 15,
   }, { check: async () => { cycles++; }, log() {} }), true);
   assert.equal(cycles, 1);
+});
+
+test("CLI watcher opt-in sync is disabled by default and runs only when enabled", async () => {
+  assert.equal(parseWatchArgs(["--pr", "13", "--sync-after-merge"]).syncAfterMerge, true);
+  let checked = 0;
+  let synced = 0;
+  const run = (syncAfterMerge) => watchPullRequests({
+    pr: 13, once: true, intervalSeconds: 15, syncAfterMerge,
+  }, {
+    check: async () => { checked++; },
+    syncMerged: async () => { synced++; },
+    log() {},
+  });
+  await run(false);
+  assert.equal(checked, 1);
+  assert.equal(synced, 0);
+  await run(true);
+  assert.equal(checked, 2);
+  assert.equal(synced, 1);
 });
