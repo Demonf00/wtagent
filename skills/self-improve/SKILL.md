@@ -29,6 +29,10 @@ If another developer (including the connected ChatGPT GitHub session) submitted 
 
 The operator may run node scripts/watch-prs.js --pr NUMBER --post-comment or explicit label mode from a non-administrator session. It watches only trusted, same-repo, owner-authored PRs against the fixed development base. A new commit triggers an isolated check, a durable per-SHA checkpoint, and optional sanitized WT_VERIFY_V1 GitHub feedback. Never silently launch this watcher, run privileged, auto-merge/install, or send private logs. The ChatGPT developer model cannot awaken on its own when a comment arrives; future unattended operation requires a separate authorized orchestrator. Refer to docs/self-upgrade-architecture.md for P0-P4 acceptance gates.
 
+## Post-merge source synchronization
+
+With the operator's explicit opt-in, the local PR watcher can use `--sync-after-merge` to fast-forward a clean, correctly checked-out `feat/self-extension` branch after a PR whose exact SHA was verified has already been merged on GitHub. This does not authorize GitHub merging, silent installation or service restarts. The currently running Node process continues executing its loaded code until restarted. If the worktree is dirty, another commit intervened, or a PR is untrusted, stop rather than resetting or overwriting anything.
+
 ## Implement
 
 1. Modify actual source files and add regression tests for all new capabilities and permission boundaries.
