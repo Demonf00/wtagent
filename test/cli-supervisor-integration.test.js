@@ -276,3 +276,80 @@ test("CLI surfaces sanitized root error code instead of only NONRECOVERABLE_WORK
   assert.match(text, /checkpoint=NO_SAFE_RECOVERY_CHECKPOINT/);
   assert.match(text, /retries=1/);
 });
+
+test("CLI bare resume reattaches a legacy failed access-challenge task without enqueuing a new instruction", async (t) => {
+  const { session } = await fixture(t);
+  const output = [];
+  const previous = {
+    taskId: "task_00000000-0000-0000-0000-000000000021",
+    sessionId: session.sessionId,
+    status: "failed",
+    error: "NONRECOVERABLE_WORKER_ERROR",
+    incident: { code: "BROWSER_ACCESS_CHALLENGE", reason: "PENDING_ASSISTANT_TURN" },
+    createdAt: new Date().toISOString(),
+    result: null,
+  };
+  let resumed = 0;
+  const supervisor = {
+    sessionsDir: path.dirname(session.directory),
+    async init() {},
+    list() { return [previous]; },
+    async resume(taskId) {
+      assert.equal(taskId, previous.taskId);
+      resumed++;
+      previous.status = "queued";
+      return { ...previous };
+    },
+    async enqueueSessionTurn() { throw new Error("Do not enqueue a new task"); },
+    get(taskId) {
+      assert.equal(taskId, previous.taskId);
+      return { ...previous, status: "completed", result: { message: "recovered" } };
+    },
+    async getEvents() { return []; },
+    async close() {},
+  };
+  await executeSupervisorSession({
+    session, options: { once: false }, resume: true,
+    chatInput: { close() {} },
+  }, {
+    interactive: true,
+    createSupervisor: () => supervisor,
+    output: (line) => output.push(String(line)),
+    readNextMessage: async () => null,
+    pollMs: 1,
+  });
+  assert.equal(resumed, 1);
+  assert.match(output.join("\n"), /Resuming task/);
+  assert.match(output.join("\n"), /recovered/);
+});
+
+test("CLI explains how to resume a challenge-paused session without replay", async (t) => {
+  const { session } = await fixture(t);
+  const output = [];
+  const record = {
+    taskId: "task_00000000-0000-0000-0000-000000000022",
+    sessionId: session.sessionId, status: "paused",
+    incident: { code: "BROWSER_ACCESS_CHALLENGE", reason: "PENDING_ASSISTANT_TURN" },
+    error: "BROWSER_ACCESS_CHALLENGE",
+  };
+  const supervisor = {
+    sessionsDir: path.dirname(session.directory),
+    async init() {},
+    list() { return []; },
+    async enqueueSessionTurn() { return record; },
+    get() { return record; },
+    async getEvents() { return []; },
+    async close() {},
+  };
+  await executeSupervisorSession({
+    session, options: { once: true },
+  }, {
+    interactive: false,
+    createSupervisor: () => supervisor,
+    output: (line) => output.push(String(line)),
+    pollMs: 1,
+  });
+  assert.match(output.join("\n"), /ChatGPT browser verification is required/);
+  assert.match(output.join("\n"), new RegExp("wtagent resume " + session.sessionId));
+  assert.match(output.join("\n"), /Do not close the browser tab/);
+});
