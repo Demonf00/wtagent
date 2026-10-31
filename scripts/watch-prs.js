@@ -12,6 +12,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { REPOSITORY, SOURCE_ROOT, runProgram, verifyPullRequest } from "./verify-pr.js";
+export { REPOSITORY } from "./verify-pr.js";
 
 export const TRUSTED_AUTHOR = "Demonf00";
 export const TRUSTED_BASE = "feat/self-extension";
