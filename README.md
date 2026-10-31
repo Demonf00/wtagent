@@ -294,3 +294,16 @@ node scripts/verify-pr.js --pr 5 --post-comment
 ```
 
 The PR comment includes only the candidate SHA, OS/Node version and check counts; raw logs and browser data stay local. Live authenticated browser smoke is **not run automatically** and requires separate approval. Passing automated checks is not proof that the ChatGPT browser session works. A disposable worktree isolates Git files, **not the OS process**: tests execute PR code with your Windows user permissions, so only verify candidates you trust and never run this as Administrator.
+
+
+### Continuous PR verifier for the developer-model/local-Windows cycle
+
+To continuously verify new commits of one explicitly selected trusted PR, use a separate non-administrator PowerShell terminal (not the WTAgent Supervisor being tested). The GitHub CLI must be authenticated (gh auth login; gh auth status):
+
+    node scripts/watch-prs.js --pr 9 --post-comment
+
+To automatically verify eligible owner-created PRs that you explicitly label wtagent-verify:
+
+    node scripts/watch-prs.js --label wtagent-verify --post-comment
+
+Add --once for a single scan. The watcher only accepts same-repo PRs authored by Demonf00 targeting feat/self-extension. It pins SHA, checkpoints each verified revision, and posts a sanitized WT_VERIFY_V1 result when --post-comment is enabled. It does not automatically merge, publish, globally install, restart, or run authenticated browser smoke. It executes candidate code with your Windows user privileges: a temporary Git worktree is NOT a security sandbox. Never run it elevated. The local verifier can run unattended, but this ChatGPT developer conversation cannot wake itself when a comment appears. A separate authorized orchestrator is still required for that part. See docs/self-upgrade-architecture.md.
