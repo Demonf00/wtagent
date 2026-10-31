@@ -3335,9 +3335,11 @@ export class BaseWebAdapter {
 
     // Persist only the evidence type and existing structural diagnostics,
     // never page text, URLs, chat messages, or a screenshot by default.
-    await this.writeDiagnostics("browser-access-challenge", {
-      stage: `challenge-${evidence.toLowerCase()}`,
-    }).catch(() => null);
+    if (this.cdpChrome) {
+      await this.writeDiagnostics("browser-access-challenge", {
+        stage: `challenge-${evidence.toLowerCase()}`,
+      }).catch(() => null);
+    }
     // CAPTCHA requires a human. Never automatically retry or resend the
     // already-committed assistant request.
     await this.restoreWindow();
