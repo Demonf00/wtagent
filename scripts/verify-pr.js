@@ -164,7 +164,10 @@ export async function verifyPullRequest({
   } finally {
     if (attached) {
       const removed = run("git", ["worktree", "remove", "--force", worktree], rootPath);
-      if (removed.code !== 0) report.cleanupError = "Git worktree removal failed";
+      if (removed.code !== 0) {
+        report.cleanupError = "Git worktree removal failed";
+        report.ok = false;
+      }
     }
     if (!attached || !report.cleanupError) {
       await fs.rm(temp, { recursive: true, force: true }).catch(() => {});
@@ -175,12 +178,18 @@ export async function verifyPullRequest({
     report.reportPath = path.join(targetReports, name + ".json");
     if (postComment) {
       const body = commentBody(report);
-      const result = run("gh", [
-        "api", "repos/" + REPOSITORY + "/issues/" + pr + "/comments",
-        "-f", "body=" + body,
-      ], rootPath);
-      report.commentPosted = result.code === 0;
-      if (!report.commentPosted) report.commentError = "GitHub CLI comment post failed; check gh auth status";
+      try {
+        const result = run("gh", [
+          "api", "repos/" + REPOSITORY + "/issues/" + pr + "/comments",
+          "-f", "body=" + body,
+        ], rootPath);
+        report.commentPosted = result.code === 0;
+      } catch {
+        report.commentPosted = false;
+      }
+      if (!report.commentPosted) {
+        report.commentError = "GitHub CLI comment post failed; check gh auth status";
+      }
     }
     await fs.writeFile(report.reportPath, JSON.stringify(report, null, 2) + "\n");
     log("[verify-pr] " + (report.ok ? "PASS" : "FAIL")
