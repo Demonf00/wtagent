@@ -158,6 +158,7 @@ export class AgentRuntime {
     session,
     approval,
     onEvent,
+    control = null,
     postAuthSetup = null,
     nativeImageReceiver = null,
     nativeMusicReceiver = null,
@@ -168,6 +169,7 @@ export class AgentRuntime {
     this.policy = policy;
     this.session = session;
     this.approval = approval;
+    this.control = control;
     this.onEvent = onEvent;
     this.postAuthSetup = postAuthSetup;
     this.nativeImageReceiver = nativeImageReceiver;
@@ -212,6 +214,7 @@ export class AgentRuntime {
     runtimeTurn = null,
     pendingToolAcknowledgement = null,
   } = {}) {
+    this.control?.checkpoint();
     this.#assertProviderReadyForMessage();
     await this.nativeMusicReceiver?.prepare();
     const outboundId = randomUUID();
@@ -994,6 +997,7 @@ export class AgentRuntime {
     files = [],
     inPlaceRecovery = false,
   } = {}) {
+    this.control?.checkpoint();
     const {
       task,
       projectRoot,
@@ -1818,6 +1822,7 @@ export class AgentRuntime {
         continue;
       }
 
+      this.control?.checkpoint();
       const identity = deriveToolIdentity({
         sessionId: this.session.sessionId,
         assistantMessageId,
@@ -1999,6 +2004,7 @@ export class AgentRuntime {
             toolCall: preparedCall,
             reasons: decision.reasons,
           });
+          this.control?.checkpoint();
           if (!approved) {
             result = deniedResult(preparedCall, decision.reasons);
           }
@@ -2014,6 +2020,7 @@ export class AgentRuntime {
           });
         }
 
+        this.control?.checkpoint();
         if (sideEffect) {
           const claimEvent = await this.session.claimSideEffectTool(sideEffect);
           await this.onEvent?.(claimEvent);
@@ -2082,6 +2089,7 @@ export class AgentRuntime {
         }
       }
 
+      this.control?.checkpoint();
       this.#assertProviderReadyForMessage();
 
       await this.#appendHandoffTranscript(
