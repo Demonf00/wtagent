@@ -46,6 +46,10 @@ For each candidate:
 
 The initial watcher polls at a minimum 15-second interval. Label scanning currently reads the newest 100 open PRs; add pagination before large-repository deployment. Full logs remain in local AppData; GitHub comments contain only test counts, status and SHA. If feedback posting fails, the local checkpoint records a feedback-failed status for explicit recovery; it does not repeatedly re-execute the same SHA.
 
+## Optional local source sync after verified merge
+
+The verifier does NOT pull a passing but unmerged PR into the development checkout. Once an authorized GitHub merge has happened, the watcher may use the optional `--sync-after-merge` flag to update a clean checked-out `feat/self-extension` branch by exact fast-forward. It verifies: the merged PR's head matches a locally passed SHA; author and repository are trusted; the GitHub merge commit is exactly the remote branch HEAD; the local branch is correct, clean and the merge commit directly follows local HEAD. Any mismatch halts without overwriting, rebasing or installing. This updates only local source files. Long-running Worker/Watcher processes still require a separately controlled restart to load new code. It does not authorize auto-merging PRs.
+
 ## Development state machine
 
 The canonical initial task registry is docs/autonomy-tasks.json, rather than GitHub Issues (disabled in this repository). Its entries define ID, dependency graph, owner, risk and acceptance checks; no runtime consumes or updates it automatically yet.
