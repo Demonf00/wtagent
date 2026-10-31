@@ -105,6 +105,7 @@ test("posting only occurs with opt-in and never includes raw test log", async (t
   const body = call.args.find((arg) => arg.startsWith("body="));
   assert.match(body, /Check \| Exit/);
   assert.match(body, /Result: FAIL/);
+  assert.match(body, /WT_VERIFY_V1 sha=0123456789abcdef0123456789abcdef01234567 result=FAIL/);
   assert.doesNotMatch(body, /PRIVATE_LOG_CONTENT/);
 });
 
@@ -124,4 +125,31 @@ test("missing GitHub CLI cannot erase a completed local test report", async (t) 
   assert.equal(result.commentPosted, false);
   assert.match(result.commentError, /GitHub CLI/);
   assert.equal(JSON.parse(await fs.readFile(result.reportPath, "utf8")).sha, SHA);
+});
+
+
+test("SHA-pinned PR candidate refuses a moved head before executing candidate code", async (t) => {
+  const { root, reports } = await fixture(t);
+  const fake = fakeRun(root);
+  const result = await verifyPullRequest({
+    pr: 11, expectedSha: "1123456789abcdef0123456789abcdef01234567",
+    postComment: true, root, reportRoot: reports,
+    run: fake.run, log() {},
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /PR head changed/);
+  assert.equal(fake.calls.some((item) =>
+    item.program === "git" && item.args[0] === "worktree"), false);
+  assert.equal(fake.calls.some((item) => item.program === "npm"), false);
+  assert.equal(fake.calls.some((item) => item.program === "gh"), false);
+});
+
+test("expected SHA is validated before accessing GitHub", async (t) => {
+  const { root, reports } = await fixture(t);
+  const fake = fakeRun(root);
+  await assert.rejects(verifyPullRequest({
+    pr: 11, expectedSha: "wrong", root, reportRoot: reports,
+    run: fake.run, log() {},
+  }), /Expected PR SHA/);
+  assert.equal(fake.calls.length, 0);
 });

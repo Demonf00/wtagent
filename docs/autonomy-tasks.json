@@ -1,0 +1,161 @@
+{
+  "schema": 1,
+  "project": "Demonf00/wtagent",
+  "goal": "WTAgent model-driven development and local Windows verification",
+  "note": "Planning manifest only. No autonomous executor consumes this file yet. GitHub Issues are disabled in this repository.",
+  "statuses": [
+    "TODO",
+    "READY",
+    "IN_PROGRESS",
+    "VERIFYING",
+    "FAILED",
+    "VERIFIED",
+    "ACCEPTED",
+    "BLOCKED"
+  ],
+  "tasks": [
+    {
+      "id": "P0-01",
+      "priority": "P0",
+      "status": "TODO",
+      "dependsOn": [],
+      "owner": "developer-model",
+      "title": "Durable XML and tool-result reconciliation",
+      "outcome": "Successful multi-round tool calls with exactly-once assistant/tool result handling.",
+      "acceptance": [
+        "Correlate every model outbound and tool result to durable IDs and acknowledgements",
+        "Test malformed/truncated XML, duplicate callbacks, lost IPC, restart during tool result",
+        "No blind replay after ambiguous outbound commit",
+        "Real Windows smoke: repeated multistep tool sequence"
+      ],
+      "risk": "high"
+    },
+    {
+      "id": "P0-02",
+      "priority": "P0",
+      "status": "TODO",
+      "dependsOn": [
+        "P0-01"
+      ],
+      "owner": "local-verifier",
+      "title": "Long-run reliability measurement",
+      "outcome": "Reproducible tool-loop success, failure, and recovery metrics.",
+      "acceptance": [
+        "Record exact candidate SHA and actual test counts",
+        "Run a native browser smoke only on explicitly approved test account/environment",
+        "Report timeouts, stop/retry reasons and all skipped checks",
+        "Failures preserve durable checkpoints"
+      ],
+      "risk": "medium"
+    },
+    {
+      "id": "P1-01",
+      "priority": "P1",
+      "status": "VERIFIED",
+      "dependsOn": [],
+      "owner": "developer-model",
+      "title": "Default CLI Supervisor Worker integration",
+      "outcome": "wtagent -C . launches Supervisor/Worker by default.",
+      "acceptance": [
+        "Default CLI uses Supervisor and Worker",
+        "--legacy remains a diagnostic fallback",
+        "Worker smoke completes a simple XML response"
+      ],
+      "risk": "medium",
+      "evidence": "User reported a successful native Windows Supervisor/Worker model.message_complete and run.completed on 2026-10-31. This is smoke evidence, not a full reliability certificate."
+    },
+    {
+      "id": "BRIDGE-01",
+      "priority": "P1",
+      "status": "VERIFYING",
+      "dependsOn": [],
+      "owner": "local-verifier",
+      "title": "Watch trusted PR SHAs and return GitHub verification summaries",
+      "outcome": "Local verifier monitors approved PR changes and reports once per candidate SHA.",
+      "acceptance": [
+        "No untrusted fork or unapproved author candidate executes",
+        "One candidate SHA is verified once across process restarts",
+        "SHA changes trigger revalidation and mismatches fail closed",
+        "Sanitized WT_VERIFY_V1 feedback does not include raw logs",
+        "Never auto-merge, install, or publish"
+      ],
+      "risk": "high",
+      "pullRequest": 9
+    },
+    {
+      "id": "BRIDGE-02",
+      "priority": "P2",
+      "status": "TODO",
+      "dependsOn": [
+        "BRIDGE-01"
+      ],
+      "owner": "developer-orchestrator",
+      "title": "Consume PR feedback and wake authorized developer model",
+      "outcome": "After a failed verified PR revision, an external agent reads feedback and prepares a bounded fix without user copy/paste.",
+      "acceptance": [
+        "Consume only verified PR SHA and trusted feedback",
+        "Review failed tests without assuming success",
+        "Produce a fix commit/PR or explicit BLOCKED state",
+        "Enforce loop and token budgets; stop at permission boundaries"
+      ],
+      "risk": "high"
+    },
+    {
+      "id": "P2-01",
+      "priority": "P2",
+      "status": "TODO",
+      "dependsOn": [
+        "P0-01"
+      ],
+      "owner": "developer-model",
+      "title": "Task DAG and acceptance checkpoint contract",
+      "outcome": "High-level goal is decomposed into durable subtasks with objective completion gates.",
+      "acceptance": [
+        "Structured goals, tasks, prerequisites, proof, budgets and stop reasons",
+        "At least three dependent subtasks with explicit artifact acceptance",
+        "Resuming a killed agent skips previously verified steps",
+        "Failure cannot be marked done without evidence"
+      ],
+      "risk": "medium"
+    },
+    {
+      "id": "P3-01",
+      "priority": "P3",
+      "status": "TODO",
+      "dependsOn": [
+        "P2-01",
+        "P0-01"
+      ],
+      "owner": "developer-model",
+      "title": "Safe context rotation at clean handoff",
+      "outcome": "Long tasks move to a fresh model conversation from a compact durable state.",
+      "acceptance": [
+        "Never rotate with pending outbound, assistant, auxiliary, or tool acknowledgement",
+        "Preserve exact artifact and verified step references",
+        "Avoid duplicate messages/tools after restart"
+      ],
+      "risk": "high"
+    },
+    {
+      "id": "P4-01",
+      "priority": "P4",
+      "status": "TODO",
+      "dependsOn": [
+        "P0-02",
+        "BRIDGE-02",
+        "P2-01",
+        "P3-01"
+      ],
+      "owner": "developer-model",
+      "title": "Self-repair with last-known-good runtime and approvals",
+      "outcome": "Agent can diagnose and propose fix PRs while reliable verifier remains separate.",
+      "acceptance": [
+        "Intentionally broken candidates are rejected before deployment",
+        "Rollback uses exact approved revision",
+        "No automatic global install, publish or merge",
+        "Explicit notification and approval for production changes"
+      ],
+      "risk": "high"
+    }
+  ]
+}

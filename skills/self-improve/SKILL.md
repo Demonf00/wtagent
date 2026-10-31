@@ -25,6 +25,10 @@ If another developer (including the connected ChatGPT GitHub session) submitted 
 - Report PASS/FAIL with SHA and any skipped checks, then stop. Do **not** invoke self-release, install globally, or merge unless user separately authorizes.
 - A failed candidate is a request for the external developer to fix the PR; do not start modifying arbitrary local files in response.
 
+## Optional continuous PR verification
+
+The operator may run node scripts/watch-prs.js --pr NUMBER --post-comment or explicit label mode from a non-administrator session. It watches only trusted, same-repo, owner-authored PRs against the fixed development base. A new commit triggers an isolated check, a durable per-SHA checkpoint, and optional sanitized WT_VERIFY_V1 GitHub feedback. Never silently launch this watcher, run privileged, auto-merge/install, or send private logs. The ChatGPT developer model cannot awaken on its own when a comment arrives; future unattended operation requires a separate authorized orchestrator. Refer to docs/self-upgrade-architecture.md for P0-P4 acceptance gates.
+
 ## Implement
 
 1. Modify actual source files and add regression tests for all new capabilities and permission boundaries.

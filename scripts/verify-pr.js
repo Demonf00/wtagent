@@ -77,6 +77,8 @@ function summary(result) {
 
 function commentBody(report) {
   const lines = [
+    "<!-- WT_VERIFY_V1 sha=" + (report.sha ?? "unknown")
+      + " result=" + (report.ok ? "PASS" : "FAIL") + " -->",
     "WTAgent Windows PR verification (isolated worktree)",
     "",
     "PR: #" + report.pr,
@@ -99,10 +101,13 @@ function commentBody(report) {
 }
 
 export async function verifyPullRequest({
-  pr, postComment = false, root = SOURCE_ROOT, reportRoot = null,
+  pr, postComment = false, expectedSha = null, root = SOURCE_ROOT, reportRoot = null,
   run = runProgram, checks = CHECKS, log = console.log,
 } = {}) {
   requiredNumber(pr);
+  if (expectedSha !== null && !/^[0-9a-f]{40}$/i.test(expectedSha)) {
+    throw new Error("Expected PR SHA must be a full 40-character commit ID.");
+  }
   const rootPath = path.resolve(root);
   const agents = await fs.readFile(path.join(rootPath, "AGENTS.md"), "utf8");
   if (!agents.includes("<!-- WTAGENT_SELF_DEVELOPMENT: ENABLED -->")) {
@@ -141,6 +146,9 @@ export async function verifyPullRequest({
     const revision = runChecked("git", ["rev-parse", "FETCH_HEAD"], rootPath, "Revision").stdout.trim();
     if (!/^[0-9a-f]{40}$/i.test(revision)) throw new Error("Invalid PR commit SHA.");
     report.sha = revision;
+    if (expectedSha && revision.toLowerCase() !== expectedSha.toLowerCase()) {
+      throw new Error("PR head changed before verification; candidate SHA mismatch.");
+    }
     runChecked("git", ["worktree", "add", "--detach", worktree, revision], rootPath, "Worktree");
     attached = true;
 
@@ -176,7 +184,7 @@ export async function verifyPullRequest({
     // Keep only local metadata and test counts in public comments.
     const name = "pr-" + pr + "-" + (report.sha?.slice(0, 12) ?? "fetch-failed");
     report.reportPath = path.join(targetReports, name + ".json");
-    if (postComment) {
+    if (postComment && !report.error?.startsWith("PR head changed")) {
       const body = commentBody(report);
       try {
         const result = run("gh", [
