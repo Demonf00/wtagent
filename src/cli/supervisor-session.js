@@ -160,9 +160,15 @@ new Error(`Task ${existing.taskId} is ${existing.status}; resume the unfinished 
 if (existing && IN_PROGRESS.has(existing.status)) {
 task = existing;
 output(`[Supervisor] Reattached to task ${task.taskId}`);
-} else if (["paused", "interrupted"].includes(existing?.status) && resuming) {
-task = await supervisor.resume(existing.taskId);
-output(`[Supervisor] Resuming paused task ${task.taskId}`);
+} else if (resuming && (
+  ["paused", "interrupted"].includes(existing?.status)
+  || (existing?.status === "failed"
+      && existing.incident?.code === "BROWSER_ACCESS_CHALLENGE")
+)) {
+  // Compatibility for sessions that failed with BROWSER_ACCESS_CHALLENGE
+  // before the Supervisor learned to pause for manual verification.
+  task = await supervisor.resume(existing.taskId);
+  output(`[Supervisor] Resuming task ${task.taskId} without replaying the user instruction`);
 } else if (existing?.status === "blocked_uncertain" && resuming) {
 output(`[Supervisor] Task ${existing.taskId} blocked_uncertain: ${existing.error}`);
 output("[Supervisor] Unsafe state: will not automatically replay outbound messages or tools.");
@@ -230,6 +236,11 @@ if (task.status !== "completed") {
 output(`[Supervisor] Task ${task.status}: ${formatSupervisorIncident(task)}`);
 if (task.status === "blocked_uncertain") {
 output("[Supervisor] Unsafe recovery blocked; no automatic browser/tool replay.");
+}
+if (task.status === "paused" && task.incident?.code === "BROWSER_ACCESS_CHALLENGE") {
+output("[Supervisor] ChatGPT browser verification is required. Complete it in the preserved Chrome window.");
+output(`[Supervisor] Then run: wtagent resume ${session.sessionId}`);
+output("[Supervisor] Do not close the browser tab or send the pending message again.");
 }
 if (task.status !== "paused" && task.status !== "cancelled") process.exitCode ||= 1;
 break;
