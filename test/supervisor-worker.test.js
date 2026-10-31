@@ -186,3 +186,20 @@ test("result recovery errors retain nonrecoverable marker", async () => {
   assert.equal(result.error.code, "RECOVERY_UNAVAILABLE");
   assert.equal(result.error.recoverable, false);
 });
+
+test("worker IPC preserves only whitelisted challenge evidence", async () => {
+  const h = harness((message, child) => {
+    if (message.type !== "start") return;
+    queueMicrotask(() => {
+      child.emit("message", { type: "failure", error: {
+        code: "BROWSER_ACCESS_CHALLENGE", recoverable: false,
+        message: "Browser verification required", challengeEvidence: "BODY",
+      } });
+      child.exit(1);
+    });
+  });
+  await assert.rejects(h.run, (error) =>
+    error.code === "BROWSER_ACCESS_CHALLENGE"
+    && error.details?.evidence === "BODY"
+    && error.recoverable === false);
+});

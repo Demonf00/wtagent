@@ -82,6 +82,9 @@ export function incidentSummary({ error, state, reason, retries, workerHealth } 
   const outbound = state?.pendingOutbound;
   return {
     code,
+    ...(code === "BROWSER_ACCESS_CHALLENGE"
+      && ["URL", "DOM", "TITLE", "BODY"].includes(error?.details?.evidence)
+      ? { challengeEvidence: error.details.evidence } : {}),
     reason: typeof reason === "string" && SAFE_CODES.test(reason) ? reason : "UNCLASSIFIED",
     retries: Number.isSafeInteger(retries) ? retries : 0,
     workerHealth: ["healthy", "stalled", "exited", "unknown"].includes(workerHealth)

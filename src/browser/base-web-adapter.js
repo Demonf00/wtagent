@@ -3283,55 +3283,73 @@ export class BaseWebAdapter {
   //      text that merely mentions "安全验证" / "Just a moment" in a reply can
   //      never false-positive; a challenge page has no composer at all.
   async throwIfBlockedPage() {
-    let pageUrl = "";
-    try {
-      pageUrl = this.page.url();
-    } catch {
-      // Fall through to the DOM checks below.
-    }
-    const challengeUrl = pageUrl.includes("challenges.cloudflare.com")
-      || pageUrl.includes("/cdn-cgi/");
-
-    const title = await this.page.title().catch(() => "");
-    const titleTokens = new Set(title.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
-    const challengeTitle =
-      (titleTokens.has("cloudflare") && titleTokens.has("attention")) ||
-      (titleTokens.has("verify") && titleTokens.has("human")) ||
-      (titleTokens.has("security") && titleTokens.has("check")) ||
-      (titleTokens.has("just") && titleTokens.has("moment"));
-
-    const challengeElement = await firstVisible([
-      this.page.locator('iframe[src*="challenges.cloudflare.com"]'),
-      this.page.locator('input[name="cf-turnstile-response"]'),
-      this.page.locator('#challenge-stage'),
-      this.page.locator('form[action*="/cdn-cgi/challenge-platform/"]'),
-      this.page.locator('[data-testid="challenge-stage"]'),
-    ]);
-
-    if (!challengeUrl && !challengeTitle && !challengeElement) {
-      // Only bother reading body text when the page has no composer — a
-      // composer proves this is the normal chat UI, not an interstitial.
-      const composer = await this.#findComposer();
-      if (!composer) {
-        const body = typeof this.page.evaluate === "function"
-          ? await this.page
-            .evaluate(() => (document.body.textContent ?? "").slice(0, 1500))
-            .catch(() => "")
-          : "";
-        if (!CHALLENGE_BODY_PATTERN.test(body)) {
-          return;
-        }
-      } else {
-        return;
+    const readEvidence = async () => {
+      const pageUrl = (() => {
+        try { return this.page.url(); } catch { return ""; }
+      })();
+      if (pageUrl.includes("challenges.cloudflare.com") || pageUrl.includes("/cdn-cgi/")) {
+        return "URL";
       }
+
+      const challengeElement = await firstVisible([
+        this.page.locator('iframe[src*="challenges.cloudflare.com"]'),
+        this.page.locator('input[name="cf-turnstile-response"]'),
+        this.page.locator('#challenge-stage'),
+        this.page.locator('form[action*="/cdn-cgi/challenge-platform/"]'),
+        this.page.locator('[data-testid="challenge-stage"]'),
+      ]);
+      if (challengeElement) return "DOM";
+
+      // Title/body signals can also appear while the provider's SPA briefly
+      // remounts or in quoted model output. An active composer rules these out.
+      if (await this.#findComposer()) return null;
+      const title = await this.page.title().catch(() => "");
+      const titleTokens = new Set(title.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
+      const challengeTitle =
+        (titleTokens.has("cloudflare") && titleTokens.has("attention")) ||
+        (titleTokens.has("verify") && titleTokens.has("human")) ||
+        (titleTokens.has("security") && titleTokens.has("check")) ||
+        (titleTokens.has("just") && titleTokens.has("moment"));
+      if (challengeTitle) return "TITLE";
+
+      const body = typeof this.page.evaluate === "function"
+        ? await this.page
+          .evaluate(() => (document.body.textContent ?? "").slice(0, 1500))
+          .catch(() => "")
+        : "";
+      return CHALLENGE_BODY_PATTERN.test(body) ? "BODY" : null;
+    };
+
+    let evidence = await readEvidence();
+    if (!evidence) return;
+    if (evidence === "TITLE" || evidence === "BODY") {
+      // Weak signals need to persist across two separate DOM snapshots; this
+      // avoids treating a momentary missing composer as a CAPTCHA.
+      await this.page.waitForTimeout(500);
+      const confirmed = await readEvidence();
+      if (!confirmed) return;
+      evidence = confirmed === "URL" || confirmed === "DOM"
+        ? confirmed : confirmed === evidence ? evidence : null;
+      if (!evidence) return;
     }
 
-    // A CAPTCHA/challenge needs the user's eyes and hands — surface the window
-    // if it was minimized before reporting the block.
+    // Persist only the evidence type and existing structural diagnostics,
+    // never page text, URLs, chat messages, or a screenshot by default.
+    if (this.cdpChrome) {
+      await this.writeDiagnostics("browser-access-challenge", {
+        stage: `challenge-${evidence.toLowerCase()}`,
+      }).catch(() => null);
+    }
+    // CAPTCHA requires a human. Never automatically retry or resend the
+    // already-committed assistant request.
     await this.restoreWindow();
     throw new BrowserAdapterError(
-      "Browser access challenge detected. Complete the verification in the preserved Chrome window before resuming; the pending message must not be resent.",
-      { code: "BROWSER_ACCESS_CHALLENGE", recoverable: false },
+      `Browser access challenge detected (${evidence}). Complete the verification in the preserved Chrome window before resuming; the pending message must not be resent.`,
+      {
+        code: "BROWSER_ACCESS_CHALLENGE",
+        recoverable: false,
+        details: { evidence },
+      },
     );
   }
 

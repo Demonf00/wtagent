@@ -120,3 +120,18 @@ test("approval stop unregisters listener and aborts approval", async () => {
   assert.equal(didUnsubscribe, true);
   assert.equal(provider.pending, null);
 });
+
+test("incident diagnostics retain only allowlisted challenge evidence", () => {
+  const state = { conversationTargetId: "target-1", pendingAssistantTurn: { status: "waiting" } };
+  const ordinary = incidentSummary({
+    error: { code: "BROWSER_ACCESS_CHALLENGE", details: { evidence: "BODY", private: "SECRET" } },
+    state, reason: "PENDING_ASSISTANT_TURN", retries: 0,
+  });
+  assert.equal(ordinary.challengeEvidence, "BODY");
+  assert.equal(JSON.stringify(ordinary).includes("SECRET"), false);
+  const invalid = incidentSummary({
+    error: { code: "BROWSER_ACCESS_CHALLENGE", details: { evidence: "SECRET" } },
+    state, reason: "PENDING_ASSISTANT_TURN", retries: 0,
+  });
+  assert.equal(invalid.challengeEvidence, undefined);
+});

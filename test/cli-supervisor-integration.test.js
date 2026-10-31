@@ -277,6 +277,35 @@ test("CLI surfaces sanitized root error code instead of only NONRECOVERABLE_WORK
   assert.match(text, /retries=1/);
 });
 
+
+test("CLI shows the safe browser challenge evidence category", async (t) => {
+  const { session } = await fixture(t);
+  const output = [];
+  const record = {
+    taskId: "task_00000000-0000-0000-0000-000000000031",
+    sessionId: session.sessionId, status: "paused",
+    incident: { code: "BROWSER_ACCESS_CHALLENGE", challengeEvidence: "BODY",
+      reason: "PENDING_ASSISTANT_TURN" },
+    error: "BROWSER_ACCESS_CHALLENGE",
+  };
+  const supervisor = {
+    sessionsDir: path.dirname(session.directory),
+    async init() {},
+    list() { return []; },
+    async enqueueSessionTurn() { return record; },
+    get() { return record; },
+    async getEvents() { return []; },
+    async close() {},
+  };
+  await executeSupervisorSession({ session, options: { once: true } }, {
+    interactive: false,
+    createSupervisor: () => supervisor,
+    output: (line) => output.push(String(line)),
+    pollMs: 1,
+  });
+  assert.match(output.join("\n"), /evidence=BODY/);
+});
+
 test("CLI bare resume reattaches a legacy failed access-challenge task without enqueuing a new instruction", async (t) => {
   const { session } = await fixture(t);
   const output = [];

@@ -34,6 +34,8 @@ function serializeError(error) {
     message: typeof error.message === "string" ? error.message.slice(0, 2048) : "",
     stack: typeof error.stack === "string" ? error.stack.slice(0, 8192) : null,
     ...(typeof error.recoverable === "boolean" ? { recoverable: error.recoverable } : {}),
+    ...(["URL", "DOM", "TITLE", "BODY"].includes(error.details?.evidence)
+      ? { challengeEvidence: error.details.evidence } : {}),
   };
 }
 

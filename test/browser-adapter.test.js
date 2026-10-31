@@ -422,6 +422,71 @@ test("a localized challenge page with no composer is detected via body text", as
   );
 });
 
+test("transient challenge body during composer remount is not a real challenge", async () => {
+  const adapter = new ChatGPTWebAdapter({ profileDir: "." });
+  let checks = 0;
+  let waits = 0;
+  adapter.page = {
+    url() { return "https://chatgpt.com/c/test"; },
+    async title() { return "ChatGPT"; },
+    locator(selector) {
+      // The composer disappears in the first snapshot but remounts before
+      // the confirmation snapshot. No challenge must be raised.
+      if (selector === "#prompt-textarea" && checks >= 1) return new VisibleLocator();
+      return new EmptyLocator();
+    },
+    getByRole() { return new EmptyLocator(); },
+    async evaluate() { checks++; return "安全验证"; },
+    async waitForTimeout() { waits++; },
+  };
+  await adapter.throwIfBlockedPage();
+  assert.equal(waits, 1);
+  assert.equal(checks, 1);
+});
+
+test("weak body-only signal must persist across two checks", async () => {
+  const adapter = new ChatGPTWebAdapter({ profileDir: "." });
+  let read = 0;
+  adapter.page = {
+    url() { return "https://chatgpt.com/c/test"; },
+    async title() { return "ChatGPT"; },
+    locator() { return new EmptyLocator(); },
+    getByRole() { return new EmptyLocator(); },
+    async evaluate() { return ++read === 1 ? "Just a moment" : "Welcome to ChatGPT"; },
+    async waitForTimeout() {},
+  };
+  await adapter.throwIfBlockedPage();
+  assert.equal(read, 2);
+});
+
+test("real stable body challenge exposes safe evidence code", async () => {
+  const adapter = new ChatGPTWebAdapter({ profileDir: "." });
+  adapter.page = {
+    url() { return "https://chatgpt.com/c/test"; },
+    async title() { return "ChatGPT"; },
+    locator() { return new EmptyLocator(); },
+    getByRole() { return new EmptyLocator(); },
+    async evaluate() { return "安全验证"; },
+    async waitForTimeout() {},
+  };
+  await assert.rejects(adapter.throwIfBlockedPage(), (error) =>
+    error.code === "BROWSER_ACCESS_CHALLENGE"
+    && error.recoverable === false && error.details?.evidence === "BODY");
+});
+
+test("a chat composer prevents title-only challenge false positives", async () => {
+  const adapter = new ChatGPTWebAdapter({ profileDir: "." });
+  adapter.page = {
+    url() { return "https://chatgpt.com/c/test"; },
+    async title() { return "Just a moment"; },
+    locator(selector) {
+      return selector === "#prompt-textarea" ? new VisibleLocator() : new EmptyLocator();
+    },
+    getByRole() { return new EmptyLocator(); },
+  };
+  await adapter.throwIfBlockedPage();
+});
+
 test("challenge words in a normal chat page never trigger a false block", async () => {
   const adapter = new ChatGPTWebAdapter({ profileDir: "." });
   // A real chat page has its composer, so even a body that mentions challenge
