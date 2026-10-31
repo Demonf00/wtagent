@@ -15,6 +15,7 @@ import {
   buildBootstrapPrompt,
   buildResumePrompt,
 } from "../protocol/prompt-builder.js";
+import { loadSelfDevelopmentInstructions } from "../protocol/project-instructions.js";
 import {
   assistantMessage,
   functionCall,
@@ -1311,13 +1312,19 @@ export class AgentRuntime {
       initialMessage = EMPTY_ASSISTANT_CONTINUE_MESSAGE;
       initialKind = "empty_response_recovery";
     } else if (resume) {
+      const registeredTools = this.registry.list();
+      const projectInstructions = await loadSelfDevelopmentInstructions({
+        projectRoot,
+        tools: registeredTools,
+      });
       const prompt = buildResumePrompt({
         instruction: rebuildingFreshConversation
           ? effectiveInstruction
           : instruction,
         state: this.session.state,
-        tools: this.registry.list(),
+        tools: registeredTools,
         nativeImages: Boolean(this.nativeImageReceiver),
+        projectInstructions,
       });
       initialMessage = prompt.web;
       // The original task is already the one safe canonical item required by the
@@ -1329,11 +1336,17 @@ export class AgentRuntime {
         : [userMessage(prompt.user, messageOptions)];
       initialKind = rebuildingFreshConversation ? "fresh_rebuild" : "resume";
     } else {
+      const registeredTools = this.registry.list();
+      const projectInstructions = await loadSelfDevelopmentInstructions({
+        projectRoot,
+        tools: registeredTools,
+      });
       const prompt = buildBootstrapPrompt({
         task,
         projectRoot,
-        tools: this.registry.list(),
+        tools: registeredTools,
         nativeImages: Boolean(this.nativeImageReceiver),
+        projectInstructions,
       });
       initialMessage = prompt.web;
       // The opening item was persisted before browser setup above.

@@ -90,6 +90,7 @@ export async function fetchNoticeDocument({
 export async function runStartupChecks({
   appDataDir,
   interactive = true,
+  allowUpdates = true,
   fetchLatest = fetchLatestVersion,
   fetchNotices = fetchNoticeDocument,
   install = installLatest,
@@ -112,7 +113,9 @@ export async function runStartupChecks({
   });
   await store.ensureLoaded();
 
-  const needUpdateCheck = !store.wasUpdatePromptedToday();
+  // An opted-in source development checkout must not invoke the npm updater.
+  // Keep ordinary notices and all installed-user defaults unchanged.
+  const needUpdateCheck = allowUpdates && !store.wasUpdatePromptedToday();
   const needNotice = !store.wasNoticeShownToday();
   const latestPromise = needUpdateCheck
     ? fetchLatest({ timeoutMs: NOTICE_TIMEOUT_MS })

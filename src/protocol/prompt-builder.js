@@ -107,8 +107,12 @@ export function buildBootstrapPrompt({
   projectRoot,
   tools,
   nativeImages = false,
+  projectInstructions = null,
 }) {
-  const developer = buildBootstrapScaffold({ projectRoot, tools, nativeImages });
+  const scaffold = buildBootstrapScaffold({ projectRoot, tools, nativeImages });
+  const developer = projectInstructions
+    ? `${scaffold}\n\n${projectInstructions}`
+    : scaffold;
   const web = `${wrapSystemPrompt(developer)}\n\n## User task\n${task}`;
   return { web, developer, user: task };
 }
@@ -140,6 +144,7 @@ export function buildResumePrompt({
   state,
   tools,
   nativeImages = false,
+  projectInstructions = null,
 }) {
   const nextInstruction = instruction?.trim()
     || "Continue the interrupted run based on the current project state and return a deliverable result.";
@@ -147,13 +152,16 @@ export function buildResumePrompt({
     ? "This is the user's next message in the same open conversation. Address it directly: if it needs files or commands, use the local tools and verify; otherwise answer directly."
     : "Continue the interrupted run: if it needs files or commands, use the local tools; otherwise answer directly.";
 
-  const developer = buildResumeScaffold({
+  const scaffold = buildResumeScaffold({
     tools,
     followUpRule,
     state,
     nextInstruction,
     nativeImages,
   });
+  const developer = projectInstructions
+    ? `${scaffold}\n\n${projectInstructions}`
+    : scaffold;
   return {
     web: wrapSystemPrompt(developer),
     developer,

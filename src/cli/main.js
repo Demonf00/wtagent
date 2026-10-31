@@ -52,6 +52,7 @@ import {
 import { createRenderer } from "./render-events.js";
 import { t } from "./i18n.js";
 import { runSelfUpdate } from "./self-update.js";
+import { isSelfDevelopmentSource } from "../protocol/project-instructions.js";
 import { runStartupChecks } from "./startup-notices.js";
 
 // Resolves the app data dir, the provider's dedicated Chrome profile dir, and
@@ -736,14 +737,21 @@ async function promptForUpdate({ currentVersion, latest }) {
 }
 
 async function maybeRunStartupChecks(options) {
+  const developmentSource = await isSelfDevelopmentSource();
   return await runStartupChecks({
     appDataDir: resolveRuntimePaths(options).appDataDir,
     interactive: isInteractiveSession(options),
+    allowUpdates: !developmentSource,
     promptUpdate: promptForUpdate,
   });
 }
 
 async function runUpdate() {
+  if (await isSelfDevelopmentSource()) {
+    console.error("Upstream npm updates are disabled for this source development checkout. Use scripts/self-release.ps1 and restart from source.");
+    process.exitCode = 1;
+    return { status: "blocked-development-source" };
+  }
   const result = await runSelfUpdate();
   if (result.status === "error") {
     process.exitCode = 1;
