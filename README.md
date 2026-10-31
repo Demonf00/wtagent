@@ -307,3 +307,14 @@ To automatically verify eligible owner-created PRs that you explicitly label wta
     node scripts/watch-prs.js --label wtagent-verify --post-comment
 
 Add --once for a single scan. The watcher only accepts same-repo PRs authored by Demonf00 targeting feat/self-extension. It pins SHA, checkpoints each verified revision, and posts a sanitized WT_VERIFY_V1 result when --post-comment is enabled. It does not automatically merge, publish, globally install, restart, or run authenticated browser smoke. It executes candidate code with your Windows user privileges: a temporary Git worktree is NOT a security sandbox. Never run it elevated. The local verifier can run unattended, but this ChatGPT developer conversation cannot wake itself when a comment appears. A separate authorized orchestrator is still required for that part. See docs/self-upgrade-architecture.md.
+
+
+#### Optional safe source synchronization after verified PR merge
+
+The watcher deliberately does not update your development checkout merely because a PR passes tests. The developer/user must first merge that PR on GitHub. To opt in to automatic updates of a clean `feat/self-extension` checkout **after** such merges, run:
+
+```powershell
+node scripts/watch-prs.js --label wtagent-verify --post-comment --sync-after-merge
+```
+
+The watcher confirms that a recorded verified PR SHA matches GitHub's merged head, the checked-out source branch is correct and clean, and the merge is an exact one-commit fast-forward. It then updates the source checkout without changing any npm/global installations or restarting running WTAgent/Watcher processes. If the working tree is dirty, remote has moved, or more than one merge intervened, it logs a blocking reason and leaves your source untouched. **No auto-merge of PRs** occurs; GitHub merge remains a separate authorization. For current source changes to take effect, restart the relevant Node process manually after checking it is idle.
