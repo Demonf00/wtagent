@@ -9,6 +9,7 @@ import { safeRuntimeEvent } from "./recovery-controller.js";
 const control = new TaskControl();
 const approvals = new Map();
 let started = false;
+let shuttingDown = false;
 let heartbeat;
 let lastProgress = 0;
 
@@ -21,6 +22,27 @@ function send(message) {
 function failureCode(error) {
   return typeof error?.code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code)
     ? error.code : "WORKER_ERROR";
+}
+
+// IPC does not automatically serialize Error's non-enumerable fields.
+// These details stay inside parent/child IPC; Supervisor persists only safe codes.
+function serializeError(error) {
+  if (!error) return null;
+  return {
+    code: failureCode(error),
+    name: typeof error.name === "string" ? error.name.slice(0, 128) : "Error",
+    message: typeof error.message === "string" ? error.message.slice(0, 2048) : "",
+    stack: typeof error.stack === "string" ? error.stack.slice(0, 8192) : null,
+    ...(typeof error.recoverable === "boolean" ? { recoverable: error.recoverable } : {}),
+  };
+}
+
+// Wait for the final message to be handed to IPC before disconnecting.
+async function sendFinal(message) {
+  if (!process.connected || !process.send) return;
+  await new Promise((resolve) => {
+    try { process.send(message, () => resolve()); } catch { resolve(); }
+  });
 }
 
 function progress(type) {
@@ -92,27 +114,29 @@ async function run(message) {
         }
       },
     });
-    send({
+    await sendFinal({
       type: "result",
       result: {
         message: typeof result?.message === "string" ? result.message : null,
         recoveryRequired: Boolean(result?.recoveryRequired),
         cancelled: Boolean(result?.cancelled),
-        error: result?.error ? { code: failureCode(result.error) } : null,
+        error: serializeError(result?.error),
       },
     });
   } catch (error) {
-    send({ type: "failure", code: failureCode(error) });
+    await sendFinal({ type: "failure", error: serializeError(error) });
   } finally {
+    shuttingDown = true;
     clearInterval(heartbeat);
-    // IPC messages should flush before exit; do not leave orphaned work.
     if (process.connected) process.disconnect();
   }
 }
 
 process.on("disconnect", () => {
   clearInterval(heartbeat);
-  process.exit(1);
+  // Parent unexpectedly disappeared: stop orphaned browser/tool work.
+  // Our own graceful disconnect must not turn success into exit code 1.
+  if (!shuttingDown) process.exit(1);
 });
 
 process.on("message", (message) => {
@@ -139,3 +163,7 @@ process.on("message", (message) => {
   send({ type: "heartbeat" });
   void run(message);
 });
+
+// Ready is independent of heartbeats and is emitted only after all IPC
+// handlers have been installed. The parent must not send start before this.
+send({ type: "ready" });
