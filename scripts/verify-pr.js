@@ -77,6 +77,8 @@ function summary(result) {
 
 function commentBody(report) {
   const lines = [
+    "<!-- WT_VERIFY_V1 sha=" + (report.sha ?? "unknown")
+      + " result=" + (report.ok ? "PASS" : "FAIL") + " -->",
     "WTAgent Windows PR verification (isolated worktree)",
     "",
     "PR: #" + report.pr,
