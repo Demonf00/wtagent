@@ -1650,7 +1650,29 @@ test("an expired submit cannot start a fallback or overlap the next composer", a
   assert.equal(adapter.pendingSubmission, null);
 });
 
-test("a DOM sample crossing the monotonic deadline cannot confirm a send", async () => {
+test("a delayed user bubble confirms beyond the submit deadline without resending", async () => {
+  const expected = freshSendTestPayload(freshSendTestId);
+  const fixture = createStructuralFreshSendPage({
+    renderedText: expected,
+    assistantAtMs: Number.POSITIVE_INFINITY,
+    transformSnapshot(entries, { elapsedMs }) {
+      return elapsedMs < 1_500 ? [] : entries;
+    },
+  });
+  const adapter = new ImmediateCorrelationChatGPTAdapter({ profileDir: "." });
+  adapter.page = fixture.page;
+  adapter.cdpChrome = { targetId: "target-structural" };
+  await adapter.startConversation();
+
+  const sent = await adapter.sendMessage(expected, { outboundId: freshSendTestId });
+  assert.equal(sent.userMessageId, "user-structural");
+  assert.equal(adapter.getLastSendStatus(), "confirmed");
+  assert.ok(adapter.virtualNow > adapter.sendConfirmationTimeoutMs());
+  assert.ok(adapter.virtualNow < adapter.postSubmitConfirmationTimeoutMs());
+  assert.equal(fixture.submitCount, 1);
+});
+
+test("a DOM sample crossing the post-submit confirmation deadline cannot confirm a send", async () => {
   const expected = freshSendTestPayload(freshSendTestId);
   let adapter;
   let crossedDeadline = false;
@@ -1660,7 +1682,8 @@ test("a DOM sample crossing the monotonic deadline cannot confirm a send", async
     transformSnapshot(entries) {
       if (entries.length > 0 && !crossedDeadline) {
         crossedDeadline = true;
-        adapter.virtualNow = adapter.sendConfirmationTimeoutMs();
+        adapter.virtualNow = adapter.monotonicNow()
+          + adapter.postSubmitConfirmationTimeoutMs();
       }
       return entries;
     },

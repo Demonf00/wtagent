@@ -6,7 +6,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { executeSession, promptToResolveProfileLock } from "../src/cli/main.js";
+import { executeSession, formatStartupBanner, promptToResolveProfileLock } from "../src/cli/main.js";
 import { AgentSession } from "../src/session/agent-session.js";
 
 async function sessionHarness(t) {
@@ -236,6 +236,28 @@ for (const stateField of ["pendingOutbound", "pendingAssistantTurn"]) {
     assert.deepEqual(reloaded.state.followUps, []);
   });
 }
+
+test("startup banner displays WEAgent, actual package version, and local minute", async () => {
+const manifest = JSON.parse(
+await fs.readFile(path.join(repositoryRoot, "package.json"), "utf8"),
+);
+const localDate = new Date(2026, 9, 31, 9, 20);
+assert.equal(
+formatStartupBanner(localDate),
+`WEAgent v${manifest.version} · 2026-10-31 09:20`,
+);
+});
+
+test("startup banner formats midnight and year boundaries without hard-coded timestamps", () => {
+assert.equal(
+formatStartupBanner(new Date(2027, 0, 1, 0, 5), "4.2.0"),
+"WEAgent v4.2.0 · 2027-01-01 00:05",
+);
+assert.equal(
+formatStartupBanner(new Date(2026, 11, 31, 23, 59), "4.2.1"),
+"WEAgent v4.2.1 · 2026-12-31 23:59",
+);
+});
 
 test("CLI help and version use the WTAgent package identity", async () => {
   const entry = path.join(repositoryRoot, "src", "cli", "main.js");

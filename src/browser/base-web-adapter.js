@@ -482,6 +482,13 @@ export class BaseWebAdapter {
     return 20_000;
   }
 
+  // Once submitComposer has resolved, no more submission actions are allowed.
+  // Give the read-only DOM / conversation correlation checks their own budget:
+  // a slow click must not consume the entire message-verification window.
+  postSubmitConfirmationTimeoutMs() {
+    return Math.max(60_000, this.sendConfirmationTimeoutMs());
+  }
+
   monotonicNow() {
     return performance.now();
   }
@@ -911,6 +918,15 @@ export class BaseWebAdapter {
 
   async #verifyPendingCanonicalUrlNow() {
     const candidate = this.pendingCanonicalUrl;
+    const verificationSendProof = this.activeSendProof;
+    const rejectsHistoricalSendMarker = () => {
+      const proof = this.activeSendProof;
+      return Boolean(
+        proof?.submissionStarted
+        && !this.freshSendConfirmed
+        && !sameConversationUrl(candidate, proof.sourceUrl)
+      );
+    };
     const candidateKind = candidate
       ? this.classifyConversationUrl(candidate)
       : "invalid";
@@ -919,6 +935,12 @@ export class BaseWebAdapter {
       || !sameConversationUrl(this.page?.url?.(), candidate)
       || !["restorable", "provisional"].includes(candidateKind)
     ) {
+      this.#resetPendingCanonicalVerification();
+      return false;
+    }
+    // While a send is unconfirmed, historical messages on another route
+    // cannot establish that the pending outbound committed to that route.
+    if (rejectsHistoricalSendMarker()) {
       this.#resetPendingCanonicalVerification();
       return false;
     }
@@ -1011,6 +1033,14 @@ export class BaseWebAdapter {
       return false;
     }
 
+    // DOM reads may cross a send failure or new send. A stale queued
+    // verification must never publish trust after its proof was invalidated.
+    if (verificationSendProof !== this.activeSendProof
+      || verificationSendProof?.invalidated
+      || rejectsHistoricalSendMarker()) {
+      this.#resetPendingCanonicalVerification();
+      return false;
+    }
     this.#trustConversationUrl(candidate);
     this.#resetPendingCanonicalVerification({ clearCandidate: true });
     this.#publishConversationIdentity();
@@ -2060,9 +2090,11 @@ export class BaseWebAdapter {
       + this.sendConfirmationTimeoutMs();
     this.lastSendStatus = "commit-unknown";
     sendProof.stage = "submit";
+    const submitDeadline = sendProof.deadline;
     const assertActive = () => {
-      if (sendProof.invalidated || this.activeSendProof !== sendProof
-        || this.monotonicNow() >= sendProof.deadline) {
+      if (sendProof.submissionComplete
+        || sendProof.invalidated || this.activeSendProof !== sendProof
+        || this.monotonicNow() >= submitDeadline) {
         throw this.#sendDeadlineError();
       }
     };
@@ -2075,8 +2107,12 @@ export class BaseWebAdapter {
       if (this.pendingSubmission === submission) this.pendingSubmission = null;
     };
     submission.then(settled, settled);
-    await this.#awaitWithinSendDeadline(submission, sendProof.deadline);
+    await this.#awaitWithinSendDeadline(submission, submitDeadline);
 
+    // The submission action finished within its strict deadline. From here
+    // onward we only verify what the provider committed; we never resubmit.
+    sendProof.submissionComplete = true;
+    sendProof.deadline = this.monotonicNow() + this.postSubmitConfirmationTimeoutMs();
     sendProof.stage = "user-message-confirmation";
     const sentMessage = await this.#waitForSentUserMessage(userBaseline, {
       deadline: sendProof.deadline,

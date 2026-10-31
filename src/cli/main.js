@@ -736,8 +736,21 @@ async function promptForUpdate({ currentVersion, latest }) {
   });
 }
 
+export function formatStartupBanner(now = new Date(), version = getPackageVersion()) {
+  const localTime = new Intl.DateTimeFormat("sv-SE", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(now);
+  return `WEAgent v${version} · ${localTime}`;
+}
+
 async function maybeRunStartupChecks(options) {
   const developmentSource = await isSelfDevelopmentSource();
+  console.log(formatStartupBanner());
   return await runStartupChecks({
     appDataDir: resolveRuntimePaths(options).appDataDir,
     interactive: isInteractiveSession(options),
