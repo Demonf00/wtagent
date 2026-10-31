@@ -82,6 +82,24 @@ await supervisor.decide(task.taskId, approval.requestId,
 ["approve", "always-tool", "always-all"].includes(choice) ? "approve" : "deny");
 }
 
+function formatSupervisorIncident(task) {
+  const incident = task?.incident;
+  const status = task?.error ?? incident?.reason ?? "stopped";
+  const details = [];
+  if (incident?.code && incident.code !== "UNCLASSIFIED"
+      && incident.code !== status) {
+    details.push(`cause=${incident.code}`);
+  }
+  if (incident?.reason && incident.reason !== "UNCLASSIFIED"
+      && incident.reason !== status) {
+    details.push(`checkpoint=${incident.reason}`);
+  }
+  if (Number.isSafeInteger(task?.retries) && task.retries > 0) {
+    details.push(`retries=${task.retries}`);
+  }
+  return details.length ? `${status} (${details.join(", ")})` : status;
+}
+
 function emitProgress(events, output) {
 for (const event of events) {
 if (event.type === "worker.started") {
@@ -190,6 +208,9 @@ emitProgress(events, output);
 }
 if (task.status !== lastStatus) {
 output(`[Supervisor] ${task.status}`);
+if (task.status === "waiting_retry" && task.incident) {
+  output(`[Supervisor] Retry: ${formatSupervisorIncident(task)}`);
+}
 lastStatus = task.status;
 }
 if (task.status === "waiting_approval" && task.pendingApproval
@@ -206,7 +227,7 @@ process.removeListener("SIGINT", onStop);
 process.removeListener("SIGTERM", onStop);
 }
 if (task.status !== "completed") {
-output(`[Supervisor] Task ${task.status}: ${task.error ?? task.incident?.reason ?? "stopped"}`);
+output(`[Supervisor] Task ${task.status}: ${formatSupervisorIncident(task)}`);
 if (task.status === "blocked_uncertain") {
 output("[Supervisor] Unsafe recovery blocked; no automatic browser/tool replay.");
 }

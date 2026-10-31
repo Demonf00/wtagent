@@ -233,3 +233,46 @@ const entry = path.join(repo, "src", "cli", "main.js");
 const { stdout } = await execFileAsync(process.execPath, [entry, "--help"]);
 assert.match(stdout, /--legacy/);
 });
+
+test("CLI surfaces sanitized root error code instead of only NONRECOVERABLE_WORKER_ERROR", async (t) => {
+  const { session } = await fixture(t);
+  const output = [];
+  const record = {
+    taskId: "task_00000000-0000-0000-0000-000000000001",
+    sessionId: session.sessionId,
+    status: "failed",
+    error: "NONRECOVERABLE_WORKER_ERROR",
+    retries: 1,
+    incident: {
+      code: "BROWSER_PROFILE_LOCKED",
+      reason: "NO_SAFE_RECOVERY_CHECKPOINT",
+    },
+  };
+  const supervisor = {
+    sessionsDir: path.dirname(session.directory),
+    async init() {},
+    list() { return []; },
+    async enqueueSessionTurn() { return record; },
+    get() { return record; },
+    async getEvents() { return []; },
+    async close() {},
+  };
+  const priorExitCode = process.exitCode;
+  try {
+    await executeSupervisorSession({
+      session, options: { once: true },
+    }, {
+      interactive: false,
+      createSupervisor: () => supervisor,
+      output: (line) => output.push(String(line)),
+      pollMs: 1,
+    });
+  } finally {
+    process.exitCode = priorExitCode;
+  }
+  const text = output.join("\\n");
+  assert.match(text, /NONRECOVERABLE_WORKER_ERROR/);
+  assert.match(text, /cause=BROWSER_PROFILE_LOCKED/);
+  assert.match(text, /checkpoint=NO_SAFE_RECOVERY_CHECKPOINT/);
+  assert.match(text, /retries=1/);
+});
