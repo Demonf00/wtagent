@@ -276,3 +276,21 @@ account testing when a provider changes its service.
 ## License
 
 [MIT](./LICENSE)
+
+## Verify self-upgrade pull requests on Windows
+
+For the opted-in WTAgent development checkout (see `AGENTS.md`), verify an external GitHub PR without switching the working branch or installing a new global WTAgent:
+
+```powershell
+node scripts/verify-pr.js --pr 5
+```
+
+The verifier fetches `Demonf00/wtagent` PR #5 into a disposable Git worktree, runs `npm ci`, syntax checks, Supervisor and browser regression tests, the full test suite, and an `npm pack` dry run. It writes a JSON summary and local step logs to `%APPDATA%\wtagent\pr-verifications`. It never merges, releases, publishes, restarts, or changes the running installation.
+
+To send a **public** test summary to that PR for the remote developer to review, authenticate the GitHub CLI with `gh auth login` and explicitly opt in:
+
+```powershell
+node scripts/verify-pr.js --pr 5 --post-comment
+```
+
+The PR comment includes only the candidate SHA, OS/Node version and check counts; raw logs and browser data stay local. Live authenticated browser smoke is **not run automatically** and requires separate approval. Passing automated checks is not proof that the ChatGPT browser session works. A disposable worktree isolates Git files, **not the OS process**: tests execute PR code with your Windows user permissions, so only verify candidates you trust and never run this as Administrator.
