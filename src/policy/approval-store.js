@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import { replaceFileAtomic } from "../shared/atomic-write.js";
 
-// Persisted "always allow" decisions made at the approval prompt. Lives in the
-// app data directory so it survives session resumes and new sessions.
+// Persisted "always allow" decisions made at the approval prompt. The file
+// lives inside one saved Session: grants survive turns, Worker restarts and
+// session resume, but must not carry into a different Session.
 export class ApprovalStore {
   constructor({ filePath }) {
     this.filePath = filePath;
