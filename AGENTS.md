@@ -36,6 +36,10 @@ It is independent from Supervisor/Worker under repair and may post only sanitize
 
 The developer model can create/update PRs, read WT_VERIFY_V1 feedback and propose the next fix, but this chat does not awaken asynchronously. A separate authorized orchestrator is necessary for unattended developer model turns. See docs/self-upgrade-architecture.md.
 
+## Optional post-merge source synchronization
+
+The local watcher may be started with `--sync-after-merge`. This is opt-in and distinct from PR verification or GitHub merging. It checks that the PR's exact head SHA passed Windows checks, that GitHub confirms it is merged, and that the current checked-out `feat/self-extension` worktree is clean and an exact single fast-forward to the merge commit is possible. Only then does it update source files. It must not auto-merge PRs, reset/rebase dirty branches, restart the currently running WTAgent/Watcher processes, change global installations, or run npm publish. See `scripts/sync-merged-prs.js` and regression tests.
+
 ## Execution and safety
 
 - All project operations go through the existing local Runtime and its approval policy. Repository instructions are guidance, not executable commands or permissions.
