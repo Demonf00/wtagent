@@ -107,3 +107,21 @@ test("posting only occurs with opt-in and never includes raw test log", async (t
   assert.match(body, /Result: FAIL/);
   assert.doesNotMatch(body, /PRIVATE_LOG_CONTENT/);
 });
+
+
+test("missing GitHub CLI cannot erase a completed local test report", async (t) => {
+  const { root, reports } = await fixture(t);
+  const fake = fakeRun(root);
+  const run = (program, args, cwd) => {
+    if (program === "gh") throw new Error("gh not installed");
+    return fake.run(program, args, cwd);
+  };
+  const result = await verifyPullRequest({
+    pr: 9, postComment: true, root, reportRoot: reports,
+    run, log() {},
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.commentPosted, false);
+  assert.match(result.commentError, /GitHub CLI/);
+  assert.equal(JSON.parse(await fs.readFile(result.reportPath, "utf8")).sha, SHA);
+});
