@@ -8,6 +8,9 @@ function workerError(code, details = null) {
   if (typeof details?.name === "string") error.name = details.name;
   if (typeof details?.stack === "string") error.stack = details.stack;
   if (typeof details?.recoverable === "boolean") error.recoverable = details.recoverable;
+  if (["URL", "DOM", "TITLE", "BODY"].includes(details?.challengeEvidence)) {
+    error.details = { evidence: details.challengeEvidence };
+  }
   return error;
 }
 
