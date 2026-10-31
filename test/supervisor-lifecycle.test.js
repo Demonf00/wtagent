@@ -199,7 +199,7 @@ test("explicitly nonrecoverable worker failure terminates without retry", async 
   assert.equal(calls, 1);
 });
 
-test("browser access challenge during pending assistant handoff is never retried automatically", async (t) => {
+test("browser access challenge pauses pending assistant handoff until explicit resume", async (t) => {
   let calls = 0;
   const f = await fixture(t, {
     execute: async ({ session }) => {
@@ -220,14 +220,21 @@ test("browser access challenge during pending assistant handoff is never retried
   const created = await f.supervisor.create({
     workspaceId: "main", instruction: "test challenge pause",
   });
-  const failed = await waitFor(() => {
+  const paused = await waitFor(() => {
     const task = f.supervisor.get(created.taskId);
-    return task.status === "failed" && task;
+    return task.status === "paused" && task;
   });
-  assert.equal(failed.error, "NONRECOVERABLE_WORKER_ERROR");
-  assert.equal(failed.incident.code, "BROWSER_ACCESS_CHALLENGE");
-  assert.equal(failed.incident.reason, "PENDING_ASSISTANT_TURN");
-  assert.equal(failed.retries, 0);
-  assert.equal(failed.attempts, 1);
+  assert.equal(paused.error, "BROWSER_ACCESS_CHALLENGE");
+  assert.equal(paused.incident.code, "BROWSER_ACCESS_CHALLENGE");
+  assert.equal(paused.incident.reason, "PENDING_ASSISTANT_TURN");
+  assert.equal(paused.retries, 0);
+  assert.equal(paused.attempts, 1);
   assert.equal(calls, 1);
+  const currentSession = await AgentSession.load({
+    sessionsDir: f.sessionsDir, sessionId: paused.sessionId,
+  });
+  assert.ok(currentSession.state.pendingAssistantTurn,
+    "manual verification must not discard the exact handoff checkpoint");
+  const events = await f.supervisor.getEvents(created.taskId);
+  assert.ok(events.some((event) => event.type === "task.manual_intervention_required"));
 });

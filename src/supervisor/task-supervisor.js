@@ -273,6 +273,16 @@ export class TaskSupervisor {
       });
       return;
     }
+    // A ChatGPT access challenge cannot be fixed by retrying the Worker.
+    // Keep the exact browser handoff checkpoint and wait for a human to
+    // complete the verification in the preserved Chrome window. The user
+    // can then explicitly resume this same task without a new instruction.
+    if (error?.code === "BROWSER_ACCESS_CHALLENGE") {
+      await this.#transition(record, "paused", {
+        ...base, error: "BROWSER_ACCESS_CHALLENGE",
+      }, "task.manual_intervention_required");
+      return;
+    }
     if (error?.recoverable === false || ["STORAGE_UNSAFE", "BAD_REQUEST"].includes(error?.code)) {
       await this.#transition(record, "failed", {
         ...base, error: "NONRECOVERABLE_WORKER_ERROR",
