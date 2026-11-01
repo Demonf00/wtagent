@@ -501,7 +501,7 @@
     {
       "id": "DP-03",
       "phase": "Dynamic Planning",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "DP-02"
       ],
@@ -516,14 +516,19 @@
         "Process restart retains VERIFIED tasks",
         "No duplicated commit or side-effect operation"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "092d343cacf3b2a6d0de6b9ca6a92dfe4189bae4",
+      "testEvidence": {
+        "full": "node --test: 939 tests, 926 passed, 13 skipped, 0 failed",
+        "syntax": "node scripts/check-syntax.js: 182 files passed",
+        "diff": "git diff --check: passed",
+        "integration": "5 DP-03 recovery and real TaskSupervisor integration tests passed"
+      },
+      "notes": "Verified four dependent revised-plan tasks in order across Coordinator and real TaskSupervisor restarts; retained verified predecessor evidence and revision; recovered interrupted Supervisor submission through stable idempotency keys without repeating side effects; preserved active Worker identity when revising successors; refused to bypass artifact drift verification. Production implementation already met acceptance criteria; added integration and fault-injection coverage."
     },
     {
       "id": "CM-01",
       "phase": "Context Management",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "DP-03"
       ],
