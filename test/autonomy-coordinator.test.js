@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import http from "node:http";
 import { randomUUID, createHash } from "node:crypto";
 import { TaskCoordinator, validateTaskPlan } from "../src/autonomy/task-coordinator.js";
 
@@ -638,4 +639,96 @@ test("FV-04 resume detects source drift without replaying successful verificatio
   assert.equal(drift.lastError, "VERIFIER_INPUT_DRIFT");
   assert.equal(await fs.readFile(path.join(f.workspaceRoot, "runs.txt"), "utf8"), "1");
   assert.deepEqual(supervisor.calls, ["run independent test once"]);
+});
+
+
+test("FV-05 Coordinator requires real test and integration results, then resumes read-only", async (t) => {
+  const f = await fixture(t);
+  await fs.mkdir(path.join(f.workspaceRoot, "test"));
+  await fs.mkdir(path.join(f.workspaceRoot, "src"));
+  await fs.writeFile(path.join(f.workspaceRoot, "src", "feature.js"), "export const ready = true;\n");
+  const testSource = [
+    'const test = require("node:test");',
+    'const fs = require("node:fs");',
+    'test("verified business logic", () => {',
+    '  const file = "runs.txt";',
+    '  const n = fs.existsSync(file) ? Number(fs.readFileSync(file, "utf8")) : 0;',
+    '  fs.writeFileSync(file, String(n + 1));',
+    '});',
+  ].join("\n");
+  await fs.writeFile(path.join(f.workspaceRoot, "test", "accept.test.js"), testSource);
+  let requests = 0;
+  const server = http.createServer((req, res) => {
+    requests += 1;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end('{"state":"ready","secret":"not-for-evidence"}');
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const port = server.address().port;
+  const supervisor = fakeSupervisor({ workspaceRoot: f.workspaceRoot });
+  const proposed = {
+    goal: "Verify tests and observable localhost behavior",
+    tasks: [{
+      id: "verify", instruction: "perform FV-05 task", dependsOn: [],
+      acceptance: [
+        { kind: "test", program: "node", argv: ["--test", "test/accept.test.js"],
+          cwd: ".", timeoutMs: 10000, minTests: 1, maxSkipped: 0 },
+        { kind: "integration", port, path: "/health",
+          expectedStatus: 200, expectedContains: '"state":"ready"',
+          timeoutMs: 5000 },
+      ],
+    }],
+  };
+  const coordinator = await TaskCoordinator.create({ ...f, supervisor, plan: proposed });
+  const completed = await coordinator.run({ timeoutMs: 15000, pollMs: 1 });
+  assert.equal(completed.status, "VERIFIED", completed.lastError);
+  assert.equal(completed.tasks[0].evidence[0].testSummary.passed, 1);
+  assert.equal(completed.tasks[0].evidence[1].statusCode, 200);
+  assert.equal(completed.tasks[0].evidence[1].containsExpected, true);
+  assert.doesNotMatch(JSON.stringify(completed), /not-for-evidence/);
+  assert.equal(await fs.readFile(path.join(f.workspaceRoot, "runs.txt"), "utf8"), "1");
+  assert.equal(requests, 1);
+
+  const restored = await TaskCoordinator.load({ ...f, supervisor });
+  assert.equal((await restored.tick()).status, "VERIFIED");
+  assert.equal(await fs.readFile(path.join(f.workspaceRoot, "runs.txt"), "utf8"), "1");
+  assert.equal(requests, 1, "Read-only resume must not issue another HTTP request");
+  assert.deepEqual(supervisor.calls, ["perform FV-05 task"]);
+
+  await fs.writeFile(path.join(f.workspaceRoot, "src", "feature.js"), "export const ready = false;\n");
+  const drift = await restored.tick();
+  assert.equal(drift.status, "BLOCKED");
+  assert.equal(drift.lastError, "VERIFIER_INPUT_DRIFT");
+  assert.equal(requests, 1);
+  assert.equal(await fs.readFile(path.join(f.workspaceRoot, "runs.txt"), "utf8"), "1");
+});
+
+test("FV-05 Coordinator rejects a test-less file even with exit code zero", async (t) => {
+  const f = await fixture(t);
+  await fs.mkdir(path.join(f.workspaceRoot, "test"));
+  await fs.writeFile(path.join(f.workspaceRoot, "test", "accept.test.js"),
+    "// test runner returns success for a file without registered tests\n");
+  const supervisor = fakeSupervisor({ workspaceRoot: f.workspaceRoot });
+  const coordinator = await TaskCoordinator.create({
+    ...f, supervisor,
+    plan: {
+      goal: "Never accept empty test files",
+      tasks: [{
+        id: "empty", instruction: "claim tests pass", dependsOn: [],
+        acceptance: [{
+          kind: "test", program: "node",
+          argv: ["--test", "test/accept.test.js"],
+          cwd: ".", timeoutMs: 10000, minTests: 1, maxSkipped: 0,
+        }],
+      }],
+    },
+  });
+  const outcome = await coordinator.run({ timeoutMs: 15000, pollMs: 1 });
+  assert.equal(outcome.status, "BLOCKED");
+  assert.equal(outcome.lastError, "VERIFIER_TEST_FAILED");
+  assert.deepEqual(supervisor.calls, ["claim tests pass"]);
 });

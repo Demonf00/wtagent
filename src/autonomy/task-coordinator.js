@@ -5,6 +5,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { replaceFileAtomic } from "../shared/atomic-write.js";
 import { executeCommandCheck, commandCheckHash } from "./command-verifier.js";
 import { makeVerificationReceipt, assertVerificationReceipt } from "./verification-receipt.js";
+import { assertSavedTestSummary } from "./test-summary.js";
+import {
+  validateHttpCheck,
+  httpCheckHash,
+  executeHttpCheck,
+  assertSavedHttpEvidence,
+} from "./http-verifier.js";
 import { assertVerificationInputsUnchanged } from "./verification-inputs.js";
 
 const TASK_ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
@@ -102,8 +109,27 @@ export function validateTaskPlan(input) {
         throw invalid("Invalid acceptance check.");
       }
       if (check.kind === "command") return validateCommandCheck(check);
+      if (check.kind === "integration") return validateHttpCheck(check);
+      if (check.kind === "test") {
+        if (Object.keys(check).some((key) => ![
+          "kind", "program", "argv", "cwd", "timeoutMs", "minTests", "maxSkipped",
+        ].includes(key)) || check.program !== "node") {
+          throw invalid("Test acceptance requires an approved explicit Node test command.");
+        }
+        const command = validateCommandCheck({
+          kind: "command", program: check.program, argv: check.argv,
+          cwd: check.cwd, timeoutMs: check.timeoutMs,
+        });
+        const minTests = check.minTests ?? 1;
+        const maxSkipped = check.maxSkipped ?? 0;
+        if (!Number.isSafeInteger(minTests) || minTests < 1 || minTests > 10000
+          || !Number.isSafeInteger(maxSkipped) || maxSkipped < 0 || maxSkipped > 10000) {
+          throw invalid("Invalid required test count or skipped-test limit.");
+        }
+        return { ...command, kind: "test", minTests, maxSkipped };
+      }
       if (check.kind !== "file") {
-        throw invalid("Only file and command acceptance checks are supported.");
+        throw invalid("Only file, command, test and integration acceptance checks are supported.");
       }
       const file = relativeFile(check.path);
       if (check.sha256 !== undefined && !HASH.test(check.sha256)) {
@@ -173,8 +199,12 @@ async function artifactEvidence(root, check) {
 async function captureBaseline(root, task) {
   const baseline = [];
   for (const check of task.acceptance) {
-    if (check.kind === "command") {
-      baseline.push({ kind: "command", checkHash: commandCheckHash(check) });
+    if (check.kind === "command" || check.kind === "test") {
+      baseline.push({ kind: check.kind, checkHash: commandCheckHash(check) });
+      continue;
+    }
+    if (check.kind === "integration") {
+      baseline.push({ kind: "integration", checkHash: httpCheckHash(check) });
       continue;
     }
     let candidate = root;
@@ -215,10 +245,25 @@ async function verifyArtifacts(root, task, evidence = null) {
   for (let index = 0; index < task.acceptance.length; index += 1) {
     const check = task.acceptance[index];
     const baseline = task.baseline?.[index];
-    if (check.kind === "command") {
+    if (check.kind === "integration") {
+      const checkHash = httpCheckHash(check);
+      if (baseline?.kind !== "integration" || baseline.checkHash !== checkHash) {
+        throw invalid("Missing or mismatched integration baseline.", "STATE_UNSAFE");
+      }
+      if (evidence) {
+        const prior = evidence[index];
+        assertSavedHttpEvidence(prior, check);
+        await assertVerificationInputsUnchanged(root, prior);
+        results.push(prior);
+      } else {
+        results.push(await executeHttpCheck(root, check));
+      }
+      continue;
+    }
+    if (check.kind === "command" || check.kind === "test") {
       const checkHash = commandCheckHash(check);
-      if (baseline?.kind !== "command" || baseline.checkHash !== checkHash) {
-        throw invalid("Missing or mismatched command baseline.", "STATE_UNSAFE");
+      if (baseline?.kind !== check.kind || baseline.checkHash !== checkHash) {
+        throw invalid("Missing or mismatched command/test baseline.", "STATE_UNSAFE");
       }
       if (evidence) {
         const prior = evidence[index];
@@ -226,11 +271,19 @@ async function verifyArtifacts(root, task, evidence = null) {
           || prior.exitCode !== 0 || prior.timedOut !== false || prior.signal !== null) {
           throw invalid("Command verification evidence is missing or invalid.", "VERIFIER_EVIDENCE_INVALID");
         }
+        if (check.kind === "test") assertSavedTestSummary(prior, check);
         // Read-only revalidation; never rerun tests or npm scripts on resume.
         await assertVerificationInputsUnchanged(root, prior);
         results.push(prior);
       } else {
-        results.push(await executeCommandCheck(root, check));
+        results.push(await executeCommandCheck(root, check, {
+          ...(check.kind === "test" ? {
+            testRequirements: {
+              minTests: check.minTests,
+              maxSkipped: check.maxSkipped,
+            },
+          } : {}),
+        }));
       }
       continue;
     }
@@ -334,9 +387,14 @@ export class TaskCoordinator {
           || task.baseline.length !== task.acceptance.length
           || task.baseline.some((item, index) => {
             const check = task.acceptance[index];
-            return check.kind === "command"
-              ? item?.kind !== "command" || item.checkHash !== commandCheckHash(check)
-              : item?.path !== check.path || (item.sha256 !== null && !HASH.test(item.sha256));
+            if (check.kind === "command" || check.kind === "test") {
+              return item?.kind !== check.kind || item.checkHash !== commandCheckHash(check);
+            }
+            if (check.kind === "integration") {
+              return item?.kind !== "integration" || item.checkHash !== httpCheckHash(check);
+            }
+            return item?.path !== check.path
+              || (item.sha256 !== null && !HASH.test(item.sha256));
           })))
       || (task.status === "VERIFIED" && !Array.isArray(task.evidence)))) {
       throw invalid("Invalid persisted task state.", "STATE_UNSAFE");
@@ -477,7 +535,8 @@ export class TaskCoordinator {
           throw invalid("Verification interrupted; previous command may have run.",
             "VERIFIER_COMPLETION_UNKNOWN");
         }
-        if (active.acceptance.some((check) => check.kind === "command")) {
+        if (active.acceptance.some((check) =>
+            check.kind === "command" || check.kind === "test" || check.kind === "integration")) {
           // Persist before executing any project-controlled verification code.
           // A crash after this boundary must never replay a possibly executed command.
           active.verificationStarted = true;

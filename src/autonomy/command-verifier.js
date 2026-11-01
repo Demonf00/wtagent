@@ -2,6 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { runProgram } from "../tools/terminal-exec.js";
+import { parseStructuredTestSummary } from "./test-summary.js";
+
+const NODE_TEST_REPORTER = new URL("./node-test-reporter.js", import.meta.url).href;
 import {
   fingerprintVerificationInputs,
   assertVerificationInputsUnchanged,
@@ -18,8 +21,11 @@ function reject(message, code = "VERIFIER_UNSAFE") {
 
 export function commandCheckHash(check) {
   return createHash("sha256").update(JSON.stringify({
-    kind: "command", program: check.program, argv: check.argv,
+    kind: check.kind, program: check.program, argv: check.argv,
     cwd: check.cwd, timeoutMs: check.timeoutMs,
+    ...(check.kind === "test" ? {
+      minTests: check.minTests, maxSkipped: check.maxSkipped,
+    } : {}),
   })).digest("hex");
 }
 
@@ -51,10 +57,13 @@ async function assertRegularPath(root, relativePath) {
 }
 
 function assertAllowedCommand(check) {
-  if (!check || check.kind !== "command" || check.cwd !== "."
+  if (!check || !["command", "test"].includes(check.kind) || check.cwd !== "."
     || !Number.isSafeInteger(check.timeoutMs) || check.timeoutMs < 1000
     || check.timeoutMs > 120000 || !Array.isArray(check.argv)) {
     throw reject("Invalid command verification declaration.");
+  }
+  if (check.kind === "test" && check.program !== "node") {
+    throw reject("Test verification requires approved Node tests.");
   }
   if (check.program === "npm") {
     const a = check.argv;
@@ -83,6 +92,7 @@ function assertAllowedCommand(check) {
  */
 export async function executeCommandCheck(root, check, {
   run = runProgram,
+  testRequirements = null,
 } = {}) {
   assertAllowedCommand(check);
   const workspace = await fs.realpath(root);
@@ -104,7 +114,9 @@ export async function executeCommandCheck(root, check, {
   try {
     result = await run({
       program: check.program,
-      argv: [...check.argv],
+      argv: testRequirements
+        ? ["--test", `--test-reporter=${NODE_TEST_REPORTER}`, ...check.argv.slice(1)]
+        : [...check.argv],
       cwd: workspace,
       timeoutMs: check.timeoutMs,
       maxOutputBytes: 4096,
@@ -126,9 +138,16 @@ export async function executeCommandCheck(root, check, {
   if (result.ok !== true || result.exitCode !== 0 || result.signal) {
     throw reject("Verification command did not pass.", "VERIFIER_COMMAND_FAILED");
   }
+  const testSummary = testRequirements
+    ? parseStructuredTestSummary(result.stdout, {
+      truncated: result.truncated === true,
+      ...testRequirements,
+    })
+    : null;
   await assertVerificationInputsUnchanged(workspace, inputs);
   return {
     kind: "command",
+    ...(testSummary ? { testSummary } : {}),
     ...inputs,
     checkHash: commandCheckHash(check),
     exitCode: 0,
