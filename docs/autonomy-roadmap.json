@@ -336,7 +336,7 @@
     {
       "id": "FR-01",
       "phase": "Failure Resolution",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "RR-03"
       ],
@@ -351,14 +351,19 @@
         "Stable diagnostic codes",
         "Existing BLOCKED checkpoints still load"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "9d252dc42a57063c8da0e8dab6a7c57dfe7ee201",
+      "testEvidence": {
+        "focused": "node --test test/autonomy-failure-classifier.test.js test/autonomy-coordinator.test.js: 32 passed",
+        "full": "node --test: 889 total, 876 passed, 13 skipped, 0 failed",
+        "syntax": "node scripts/check-syntax.js: 172 files",
+        "diff": "git diff --check: passed"
+      },
+      "notes": "Five stable diagnostic classes, sanitized codes, fail-closed unknowns, recomputation on load/save, forged classification ignored, legacy BLOCKED checkpoints remain blocked."
     },
     {
       "id": "FR-02",
       "phase": "Failure Resolution",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "FR-01"
       ],
