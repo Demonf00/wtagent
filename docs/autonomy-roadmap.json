@@ -528,7 +528,7 @@
     {
       "id": "CM-01",
       "phase": "Context Management",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "DP-03"
       ],
@@ -543,14 +543,19 @@
         "No credentials or raw private logs",
         "Missing canonical state cannot be invented"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "baa05d188576beba699a7e7a63539ab96760c976",
+      "testEvidence": {
+        "full": "node --test: 946 total, 933 passed, 13 skipped, 0 failed",
+        "syntax": "node scripts/check-syntax.js: 183 files passed",
+        "diff": "git diff --check: passed",
+        "focused": "Context Management plus DP-02/DP-03 recovery tests: 30 passed"
+      },
+      "notes": "Introduced a bounded, read-only canonical context manifest derived from freshly validated TaskCoordinator checkpoint state and actual Git HEAD. Includes hashed goal identity, plan/task IDs, revision, verified receipt digests, task dependencies, hazard flags and deterministic next action. Excludes raw instructions, credentials, private logs and untrusted conversation summaries. Missing or corrupt checkpoint, mismatched Supervisor identity and unavailable Git state fail closed. Tested running/paused Workers, checkpoint restart, source SHA changes, dirty worktree and receipt corruption. Automatic rotation and handoff consumption remain CM-02/CM-03 responsibilities."
     },
     {
       "id": "CM-02",
       "phase": "Context Management",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "CM-01"
       ],
