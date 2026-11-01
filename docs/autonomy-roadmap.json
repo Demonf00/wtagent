@@ -639,7 +639,7 @@
     {
       "id": "AS-02",
       "phase": "Autonomy Service",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "AS-01"
       ],
@@ -655,14 +655,19 @@
         "Stale-owner recovery is explicit and audited",
         "No accidental duplicate Worker"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "5bd15eedbf1ccca2069f733097cba545d59656ef",
+      "testEvidence": {
+        "syntax": "npm run check: Syntax OK, 189 files",
+        "fullSuite": "npm test: 976 tests; 963 passed, 0 failed, 13 skipped",
+        "focused": "AS-01/AS-02: 16/16 passed; cross-process ownership, stale-owner explicit recovery, concurrent maintenance exclusion, audit INTENT/COMMITTED, CLI recovery, checkpoint handoff without resubmission",
+        "diff": "git diff --check and git diff --cached --check passed"
+      },
+      "notes": "Normal scheduling refuses stale or uncertain process owners. Recovery requires a proven-dead PID and observed token, with explicit quarantine and durable audit. Recovery guard blocks ownership during incomplete reconciliation. Orchestrator retains Coordinator checkpoint and avoids replaying Worker submissions. No push, merge, release, or restart."
     },
     {
       "id": "AS-03",
       "phase": "Autonomy Service",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "AS-02"
       ],
