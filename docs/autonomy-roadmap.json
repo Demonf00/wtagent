@@ -667,7 +667,7 @@
     {
       "id": "AS-03",
       "phase": "Autonomy Service",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "AS-02"
       ],
@@ -683,14 +683,19 @@
         "Escalation never grants permission",
         "Sensitive information redacted"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "bf854795059c769cb7e1abdcb554d055d63f1d98",
+      "testEvidence": {
+        "syntax": "npm run check: Syntax OK, 191 files",
+        "fullSuite": "npm test: 982 tests; 969 passed, 0 failed, 13 skipped",
+        "focused": "AS-03: 6 dedicated tests plus 5 existing autonomy CLI regressions passed; redacted approval alerts, heartbeat deduplication across restarts, stalled/paused Worker alerts, malformed checkpoint fail-closed, real Supervisor/Coordinator observations",
+        "diff": "git diff --check and git diff --cached --check passed"
+      },
+      "notes": "Implemented sanitized status-only CLI notifications with durable heartbeat and reminder deduplication. Approval alerts are informational and never authorize or execute tool approvals. No external Discord delivery, background service, push, merge, release or restart."
     },
     {
       "id": "OB-01",
       "phase": "Observability and Delivery",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "AS-03"
       ],
