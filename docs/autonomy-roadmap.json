@@ -390,7 +390,7 @@
     {
       "id": "FR-03",
       "phase": "Failure Resolution",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "FR-02"
       ],
@@ -405,14 +405,19 @@
         "No fabricated artifact success",
         "Uncertain side effects never auto-repair by replay"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "7cd6c67dfca7c92d1536f5f480ac3b77a11e3734",
+      "testEvidence": {
+        "focused": "node --test test/autonomy-repair-subtask.test.js test/autonomy-repair-budget.test.js test/autonomy-failure-classifier.test.js test/autonomy-coordinator.test.js: 45 passed",
+        "full": "node --test: 902 total, 889 passed, 13 skipped, 0 failed",
+        "syntax": "node scripts/check-syntax.js: 176 files",
+        "diff": "git diff --check: passed"
+      },
+      "notes": "Durable PREPARED proposal for verified Supervisor completion and file-artifact failure, bound to original acceptance, original source task and one reserved repair attempt; reload rejects tampering; no worker execution or permission changes."
     },
     {
       "id": "FR-04",
       "phase": "Failure Resolution",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "FR-03"
       ],
