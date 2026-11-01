@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import {
+  acquireOrchestratorOwner, orchestratorOwnerPaths,
+} from "./orchestrator-ownership.js";
 
 const SCHEMA = 1;
 const STOPPED = new Set(["COMPLETE", "BLOCKED", "PAUSED", "UNCERTAIN"]);
@@ -43,50 +46,6 @@ async function persist(file, state) {
     } finally { await handle.close(); }
     await fs.rename(tmp, file);
   } finally { await fs.rm(tmp, { force: true }).catch(() => {}); }
-}
-
-function live(pid) {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return error.code === "ESRCH" ? false : null; }
-}
-
-async function acquire(file) {
-  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  const token = randomUUID();
-  const claim = JSON.stringify({ schema: SCHEMA, pid: process.pid, token });
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const handle = await fs.open(file, "wx", 0o600);
-      try { await handle.writeFile(claim); await handle.sync(); }
-      finally { await handle.close(); }
-      return async () => {
-        const current = await regularJson(file, true);
-        if (current?.token === token && current.pid === process.pid) {
-          await fs.rm(file, { force: true });
-        }
-      };
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      const previous = await regularJson(file);
-      if (previous.schema !== SCHEMA || typeof previous.token !== "string"
-        || !/^[a-f0-9-]{36}$/.test(previous.token)) {
-        throw failure("ORCHESTRATOR_OWNER_UNCERTAIN", "Invalid previous owner.");
-      }
-      const isAlive = live(previous.pid);
-      if (isAlive !== false) {
-        throw failure("ORCHESTRATOR_ALREADY_OWNED",
-          "Another owner may be executing this goal.");
-      }
-      // Re-read before removal. Never steal a live, ambiguous, or changed owner.
-      const again = await regularJson(file);
-      if (JSON.stringify(previous) !== JSON.stringify(again)) {
-        throw failure("ORCHESTRATOR_OWNER_UNCERTAIN", "Owner changed during recovery.");
-      }
-      await fs.rm(file);
-    }
-  }
-  throw failure("ORCHESTRATOR_ALREADY_OWNED", "Could not acquire goal ownership.");
 }
 
 function validateState(value, workspaceRoot, stateFile) {
@@ -147,13 +106,11 @@ export async function runDurableOrchestrator({
   // Prevent two separately checkpointed goals from mutating one workspace
   // simultaneously. A workspace-wide lock is intentionally more conservative
   // than one keyed to an individual goal's name.
-  const rootKey = createHash("sha256").update(root).digest("hex");
-  const workspaceLock = path.join(path.dirname(root),
-    ".wtagent-orchestrator-" + rootKey + ".lock");
-  const releaseWorkspace = await acquire(workspaceLock);
+  const locks = orchestratorOwnerPaths({workspaceRoot:root,stateFile:checkpoint});
+  const releaseWorkspace = await acquireOrchestratorOwner(locks.workspace);
   let releaseCheckpoint;
   try {
-    releaseCheckpoint = await acquire(checkpoint + ".orchestrator.lock");
+    releaseCheckpoint = await acquireOrchestratorOwner(locks.checkpoint);
     let state = await regularJson(file, true);
     if (state) {
       validateState(state, root, checkpoint);

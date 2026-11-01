@@ -32,6 +32,9 @@ import { executeSupervisorSession } from "./supervisor-session.js";
 import { inspectSessionContext, prepareContextRotation } from "../context/context-manager.js";
 import { runAutonomyCommand } from "./autonomy-command.js";
 import { runDurableOrchestrator, readDurableOrchestratorState } from "../autonomy/durable-orchestrator.js";
+import {
+  inspectOrchestratorOwner, recoverStaleOrchestratorOwner,
+} from "../autonomy/orchestrator-ownership.js";
 import { AgentSession } from "../session/agent-session.js";
 import { PolicyEngine } from "../policy/policy-engine.js";
 import { ApprovalStore } from "../policy/approval-store.js";
@@ -1011,6 +1014,38 @@ autonomyCommand
       workspaceRoot: opts.project ?? process.cwd(),
     });
     console.log(JSON.stringify(state, null, 2));
+  });
+
+autonomyCommand
+  .command("orchestrator-owner")
+  .description("Inspect a workspace or checkpoint process owner before recovery")
+  .requiredOption("--state <path>", "Existing orchestration checkpoint path")
+  .requiredOption("--scope <scope>", "Lock scope: workspace or checkpoint")
+  .action(async (_, command) => {
+    const opts=command.optsWithGlobals();
+    const { realpath }=await import("node:fs/promises");
+    const workspaceRoot=await realpath(opts.project ?? process.cwd());
+    console.log(JSON.stringify(await inspectOrchestratorOwner({
+      workspaceRoot,stateFile:opts.state,scope:opts.scope,
+    }),null,2));
+  });
+
+autonomyCommand
+  .command("orchestrator-recover")
+  .description("Explicitly quarantine a proven-dead owner and write an audit trail")
+  .requiredOption("--state <path>", "Existing orchestration checkpoint path")
+  .requiredOption("--scope <scope>", "Lock scope: workspace or checkpoint")
+  .requiredOption("--token <token>", "Observed stale owner token from orchestrator-owner")
+  .action(async (_, command) => {
+    assertNativeRuntimeSupported();
+    const opts=command.optsWithGlobals();
+    const { realpath }=await import("node:fs/promises");
+    const workspaceRoot=await realpath(opts.project ?? process.cwd());
+    const result=await recoverStaleOrchestratorOwner({
+      workspaceRoot,stateFile:opts.state,
+      scope:opts.scope,expectedToken:opts.token,
+    });
+    console.log(JSON.stringify(result,null,2));
   });
 
 autonomyCommand
