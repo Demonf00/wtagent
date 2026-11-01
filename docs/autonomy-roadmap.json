@@ -184,7 +184,7 @@
     {
       "id": "FV-05",
       "phase": "Functional Verification",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "FV-04"
       ],
@@ -199,14 +199,27 @@
         "Integration verifies observable output not a model claim",
         "Run in restricted verifier process"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "c83ae5d761a8bdbfd5980066f4ccc91729ded69f",
+      "testEvidence": {
+        "syntax": "166 files OK",
+        "specialized": {
+          "passed": 44,
+          "failed": 0,
+          "skipped": 0
+        },
+        "full": {
+          "tests": 866,
+          "passed": 853,
+          "failed": 0,
+          "skipped": 13
+        }
+      },
+      "notes": "Strict actual Node test-case reporting excludes synthetic empty-file passes; restricted localhost GET validates real response with bounded metadata; persisted evidence revalidates without test or network replay. Verifier is a restricted process, not an OS sandbox."
     },
     {
       "id": "FV-06",
       "phase": "Functional Verification",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "FV-05"
       ],
