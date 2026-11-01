@@ -583,7 +583,7 @@
     {
       "id": "CM-03",
       "phase": "Context Management",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "CM-02"
       ],
@@ -599,14 +599,19 @@
         "No re-execution of uncertain side effects",
         "Cross-conversation multi-task fixture passes"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "73aa689e0431805be424e9b8ebfdcc937e102f94",
+      "testEvidence": {
+        "syntax": "npm run check: Syntax OK, 185 files",
+        "fullSuite": "npm test: 960 tests, 947 passed, 0 failed, 13 skipped",
+        "focused": "32 tests passed: manifest-backed task recovery, CLI multi-task handoff, verified-task non-replay, blocked_uncertain Worker, dirty worktree completion guard",
+        "diff": "git diff --check and git diff --cached --check passed"
+      },
+      "notes": "Cross-conversation recovery is explicitly enabled with autonomy resume --conversation-session <sessionId>. Canonical Coordinator checkpoint, Session lineage, verification receipts and source state are independently checked. Legacy autonomy resume remains available. No push, merge, publish or restart."
     },
     {
       "id": "AS-01",
       "phase": "Autonomy Service",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "CM-03"
       ],
