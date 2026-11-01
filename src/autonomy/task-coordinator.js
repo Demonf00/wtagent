@@ -29,6 +29,58 @@ function relativeFile(value) {
   return value;
 }
 
+const ALLOWED_NPM_VERIFICATION_SCRIPTS = new Set([
+  "check", "test", "test:unit", "test:integration", "test:windows",
+  "test:chatgpt-dom", "test:media",
+]);
+
+// This only validates declarations. Command execution is deliberately unavailable
+// until a separate, restricted verifier is implemented.
+function validateCommandCheck(check) {
+  if (Object.keys(check).some((key) =>
+    !["kind", "program", "argv", "cwd", "timeoutMs"].includes(key))) {
+    throw invalid("Command acceptance contains unsupported fields.");
+  }
+  if (check.cwd !== undefined && check.cwd !== ".") {
+    throw invalid("Command verification must use the workspace root.");
+  }
+  const timeoutMs = check.timeoutMs ?? 60_000;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 120_000) {
+    throw invalid("Command verification timeout must be 1000 to 120000 ms.");
+  }
+  const args = check.argv;
+  if (!Array.isArray(args) || args.some((arg) =>
+    typeof arg !== "string" || !arg || Buffer.byteLength(arg, "utf8") > 256)) {
+    throw invalid("Command verification requires bounded argument strings.");
+  }
+  if (check.program === "npm") {
+    const script = args.length === 1 && args[0] === "test" ? "test"
+      : args.length === 2 && args[0] === "run" ? args[1] : null;
+    if (!ALLOWED_NPM_VERIFICATION_SCRIPTS.has(script)) {
+      throw invalid("Command verification allows only approved npm check/test scripts.");
+    }
+  } else if (check.program === "node") {
+    if (args.length < 2 || args.length > 9 || args[0] !== "--test"
+      || args.slice(1).some((arg) =>
+        !/^test\/[a-zA-Z0-9_/-]+\.test\.js$/.test(arg)
+        || arg.split("/").includes("..")
+        || arg.split("/").includes("."))) {
+      throw invalid("Node verification requires explicit safe test/*.test.js paths.");
+    }
+  } else {
+    throw invalid("Unsupported command verification program.");
+  }
+  return { kind: "command", program: check.program, argv: [...args],
+    cwd: ".", timeoutMs };
+}
+
+function assertCommandVerifierAvailable(tasks) {
+  if (tasks.some((task) => task.acceptance.some((check) => check.kind === "command"))) {
+    throw invalid("Command verification is not implemented yet; refusing unverified execution.",
+      "VERIFIER_UNAVAILABLE");
+  }
+}
+
 export function validateTaskPlan(input) {
   if (!input || !nonempty(input.goal, 8192) || !Array.isArray(input.tasks)
     || input.tasks.length < 1 || input.tasks.length > MAX_TASKS) {
@@ -50,8 +102,12 @@ export function validateTaskPlan(input) {
       throw invalid(`Task ${task.id} needs objective artifact checks.`);
     }
     const acceptance = task.acceptance.map((check) => {
-      if (!check || check.kind !== "file") {
-        throw invalid("Only file artifact checks are supported in this version.");
+      if (!check || typeof check !== "object" || Array.isArray(check)) {
+        throw invalid("Invalid acceptance check.");
+      }
+      if (check.kind === "command") return validateCommandCheck(check);
+      if (check.kind !== "file") {
+        throw invalid("Only file and command acceptance checks are supported.");
       }
       const file = relativeFile(check.path);
       if (check.sha256 !== undefined && !HASH.test(check.sha256)) {
@@ -210,6 +266,7 @@ export class TaskCoordinator {
       if (error.code !== "ENOENT") throw error;
     }
     const checked = validateTaskPlan(plan);
+    assertCommandVerifierAvailable(checked.tasks);
     const planId = randomUUID();
     const state = {
       schema: 1, planId, workspaceRoot: root, workspaceId,
@@ -242,6 +299,7 @@ export class TaskCoordinator {
       throw invalid("Coordinator checkpoint identity mismatch.", "STATE_UNSAFE");
     }
     const checked = validateTaskPlan({ goal: state.goal, tasks: state.tasks });
+    assertCommandVerifierAvailable(checked.tasks);
     if (checked.tasks.length !== state.tasks.length
       || !["RUNNING", "VERIFIED", "BLOCKED"].includes(state.status)
       || (state.status === "VERIFIED"

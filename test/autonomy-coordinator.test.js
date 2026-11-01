@@ -318,3 +318,73 @@ test("P2 rejects symlinked artifact paths", async (t) => {
   assert.equal(result.lastError, "ARTIFACT_UNSAFE");
   assert.deepEqual(supervisor.calls, [], "Unsafe artifact path must be rejected before Worker submission");
 });
+
+
+test("FV-01 validates bounded command acceptance without executing it", () => {
+  const current = plan();
+  current.tasks[0].acceptance.push({
+    kind: "command", program: "npm", argv: ["run", "check"],
+  });
+  const validated = validateTaskPlan(current);
+  assert.deepEqual(validated.tasks[0].acceptance[1], {
+    kind: "command", program: "npm", argv: ["run", "check"],
+    cwd: ".", timeoutMs: 60_000,
+  });
+
+  current.tasks[0].acceptance[1] = {
+    kind: "command", program: "node",
+    argv: ["--test", "test/autonomy-coordinator.test.js"],
+    cwd: ".", timeoutMs: 20_000,
+  };
+  assert.deepEqual(validateTaskPlan(current).tasks[0].acceptance[1], current.tasks[0].acceptance[1]);
+
+  // Legacy plans keep their normalized file-check representation.
+  assert.deepEqual(validateTaskPlan(plan()).tasks[0].acceptance, [
+    { kind: "file", path: "one.txt", minBytes: 1 },
+  ]);
+});
+
+test("FV-01 rejects executable, shell, unsafe path and unbounded command declarations", () => {
+  const invalidChecks = [
+    { kind: "command", program: "cmd", argv: ["/c", "echo", "bad"] },
+    { kind: "command", program: "powershell", argv: ["-Command", "echo bad"] },
+    { kind: "command", program: "npm", argv: ["install"] },
+    { kind: "command", program: "npm", argv: ["run", "prepack"] },
+    { kind: "command", program: "npm", argv: ["run", "check", "&&", "echo"] },
+    { kind: "command", program: "npm", argv: ["run", "check"], cwd: "../outside" },
+    { kind: "command", program: "npm", argv: ["run", "check"], env: { SECRET: "x" } },
+    { kind: "command", program: "npm", argv: ["run", "check"], timeoutMs: Infinity },
+    { kind: "command", program: "npm", argv: ["run", "check"], timeoutMs: 999 },
+    { kind: "command", program: "npm", argv: ["run", "check"], timeoutMs: 120001 },
+    { kind: "command", program: "node", argv: ["-e", "process.exit(0)"] },
+    { kind: "command", program: "node", argv: ["--test", "../escape.test.js"] },
+    { kind: "command", program: "node", argv: ["--test", "test/../escape.test.js"] },
+    { kind: "command", program: "node", argv: ["--test", "C:/escape.test.js"] },
+    { kind: "command", program: "node", argv: ["--test", "test/foo.test.js", "--eval"] },
+    { kind: "command", program: "node", argv: ["--test", "test/a\\b.test.js"] },
+    { kind: "command", program: "node", argv: ["--test", "test/" + "a".repeat(260) + ".test.js"] },
+    { kind: "command", program: "npm", argv: "run check" },
+    { kind: "command", program: "npm", argv: [] },
+    { kind: "command", program: "npm", argv: [42] },
+    { kind: "unknown", path: "one.txt" },
+  ];
+  for (const check of invalidChecks) {
+    const proposed = plan();
+    proposed.tasks[0].acceptance.push(check);
+    assert.throws(() => validateTaskPlan(proposed),
+      { code: "INVALID_PLAN" }, JSON.stringify(check));
+  }
+});
+
+test("FV-01 fail-closes a plan containing command checks before verifier implementation", async (t) => {
+  const f = await fixture(t);
+  const supervisor = fakeSupervisor({ workspaceRoot: f.workspaceRoot });
+  const proposed = plan();
+  proposed.tasks[0].acceptance.push({
+    kind: "command", program: "npm", argv: ["test"],
+  });
+  await assert.rejects(TaskCoordinator.create({ ...f, supervisor, plan: proposed }),
+    { code: "VERIFIER_UNAVAILABLE" });
+  assert.equal(supervisor.calls.length, 0);
+  await assert.rejects(fs.stat(f.stateFile), { code: "ENOENT" });
+});
