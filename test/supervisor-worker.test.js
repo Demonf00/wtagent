@@ -39,12 +39,14 @@ class FakeChild extends EventEmitter {
   }
 }
 
-function harness(onSend, { control = new TaskControl(), onRequired = async () => {} } = {}) {
+function harness(onSend, {
+  control = new TaskControl(), onRequired = async () => {}, onDisplay = null,
+} = {}) {
   let child;
   const approvalProvider = new SupervisorApprovalProvider({ control, onRequired });
   const run = runWorkerProcess({
     sessionsDir: "/tmp/sessions", sessionId: "sess", workspaceRoot: "/tmp",
-    options: {}, settings, control, approvalProvider,
+    options: {}, settings, control, approvalProvider, onDisplay,
     forkProcess: () => (child = new FakeChild(onSend)),
   });
   return { run, control, approvalProvider, get child() { return child; } };
@@ -202,4 +204,45 @@ test("worker IPC preserves only whitelisted challenge evidence", async () => {
     error.code === "BROWSER_ACCESS_CHALLENGE"
     && error.details?.evidence === "BODY"
     && error.recoverable === false);
+});
+
+
+test("Worker IPC relays model and tool echo to local display without persisting provider content", async () => {
+  const displayed = [];
+  const h = harness((message, child) => {
+    if (message.type !== "start") return;
+    queueMicrotask(() => {
+      child.emit("message", {
+        type: "live",
+        event: { type: "model.progress", payload: {
+          message: "Checking source files",
+          extra: "SECRET_NOT_FOR_SUPERVISOR_STORAGE",
+        } },
+      });
+      child.emit("message", {
+        type: "live",
+        event: { type: "tool.proposed", payload: {
+          name: "terminal.exec",
+          args: { argv: ["-e", "PASSWORD=SECRET"] },
+        } },
+      });
+      child.emit("message", {
+        type: "live",
+        event: { type: "tool.completed", payload: {
+          result: { name: "terminal.exec", ok: true, stdout: "SECRET" },
+        } },
+      });
+      child.emit("message", { type: "result", result: { message: "done" } });
+      child.exit(0);
+    });
+  }, {
+    onDisplay: (event) => displayed.push(event),
+  });
+  assert.equal((await h.run).message, "done");
+  assert.deepEqual(displayed.map((item) => item.type), [
+    "model.progress", "tool.proposed", "tool.completed",
+  ]);
+  assert.deepEqual(displayed[1].payload, { name: "terminal.exec" });
+  assert.deepEqual(displayed[2].payload, { name: "terminal.exec", ok: true });
+  assert.doesNotMatch(JSON.stringify(displayed), /SECRET|PASSWORD/);
 });
