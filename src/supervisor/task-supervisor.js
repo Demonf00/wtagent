@@ -10,7 +10,7 @@ import { SupervisorApprovalProvider } from "./approval-provider.js";
 import { runWorkerProcess } from "./worker-client.js";
 import {
   recoveryOptions, retryDelay, inspectCheckpoint, incidentSummary,
-  safeRuntimeEvent,
+  safeRuntimeEvent, recoveryDecision,
 } from "./recovery-controller.js";
 import { safeLiveEvent } from "./live-display.js";
 
@@ -229,8 +229,24 @@ const file = this.#eventPath(taskId);
 
   async #transition(record, status, patch = {}, eventType = `task.${status}`) {
     if (!STATES.has(status)) throw fail("Invalid task state.");
+    // A recovery decision is durable on the same task record and event stream.
+    // "recovering" is an intermediate transition, not another decision.
+    const audit = patch.incident && status !== "recovering"
+      ? recoveryDecision({
+        status, incident: patch.incident,
+        attempts: record.attempts ?? 0,
+        retries: patch.retries ?? record.retries ?? 0,
+        retryAt: patch.retryAt ?? null,
+        stopReason: patch.error ?? null,
+      })
+      : null;
+    if (audit) {
+      record.recoveryHistory = [...(record.recoveryHistory ?? []), audit];
+    }
     Object.assign(record, patch, { status });
-    await this.#recordEvent(record, eventType, { status });
+    await this.#recordEvent(record, eventType, {
+      status, ...(audit ? { recovery: audit } : {}),
+    });
   }
 
   async #recoverAfterFailure(record, error, workerHealth = "unknown") {

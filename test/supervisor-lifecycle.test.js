@@ -238,3 +238,123 @@ test("browser access challenge pauses pending assistant handoff until explicit r
   const events = await f.supervisor.getEvents(created.taskId);
   assert.ok(events.some((event) => event.type === "task.manual_intervention_required"));
 });
+
+test("RR-02 preserves sanitized retry decisions and terminal stop across restart", async (t) => {
+  const secret = "SECRET_BROWSER_PROMPT_abc123";
+  let calls = 0;
+  const f = await fixture(t, {
+    execute: async () => {
+      calls++;
+      throw Object.assign(new Error(secret), { code: "TURN_TIMEOUT" });
+    },
+    recovery: { maxRetries: 2, retryBaseMs: 10, retryMaxMs: 20 },
+  });
+  const created = await f.supervisor.create({
+    workspaceId: "main", instruction: secret,
+  });
+  const failed = await waitFor(() => {
+    const record = f.supervisor.get(created.taskId);
+    return record.status === "failed" && record;
+  });
+  assert.equal(calls, 3);
+  assert.equal(failed.attempts, 3);
+  assert.equal(failed.retries, 2);
+  assert.equal(failed.error, "RECOVERY_RETRY_LIMIT_REACHED");
+  assert.equal(failed.recoveryHistory.length, 3);
+  assert.deepEqual(failed.recoveryHistory.map(entry => entry.action),
+    ["retry", "retry", "stop"]);
+  assert.deepEqual(failed.recoveryHistory.map(entry => entry.attempts),
+    [1, 2, 3]);
+  assert.deepEqual(failed.recoveryHistory.map(entry => entry.retries),
+    [1, 2, 2]);
+  assert.ok(failed.recoveryHistory.slice(0, 2).every(entry =>
+    Number.isFinite(Date.parse(entry.retryAt))));
+  assert.equal(failed.recoveryHistory[2].stopReason, "RECOVERY_RETRY_LIMIT_REACHED");
+
+  const events = await f.supervisor.getEvents(created.taskId);
+  const decisions = events.filter(event => event.payload?.recovery)
+    .map(event => event.payload.recovery);
+  assert.deepEqual(decisions, failed.recoveryHistory);
+  assert.equal(JSON.stringify(failed.recoveryHistory).includes(secret), false);
+  assert.equal(JSON.stringify(decisions).includes(secret), false);
+
+  const durable = JSON.parse(await fs.readFile(
+    path.join(f.dataDir, `${created.taskId}.json`), "utf8"));
+  assert.deepEqual(durable.recoveryHistory, failed.recoveryHistory);
+  await f.supervisor.close();
+  await f.makeSupervisor({ autoRun: false });
+  const reloaded = f.supervisor.get(created.taskId);
+  assert.deepEqual(reloaded.recoveryHistory, failed.recoveryHistory);
+  assert.equal(reloaded.error, "RECOVERY_RETRY_LIMIT_REACHED");
+});
+
+
+test("RR-02 matched uncertain commit stays on bounded reconciliation retries", async (t) => {
+  const secret = "SECRET_UNCERTAIN_MESSAGE_abc123";
+  let calls = 0;
+  const f = await fixture(t, {
+    recovery: { maxRetries: 1, retryBaseMs: 10 },
+    execute: async ({ session }) => {
+      calls++;
+      await session.update({
+        runCount: 1, phase: "interrupted",
+        pendingOutbound: {
+          outboundId: "outbound-1", conversationTargetId: "target-1",
+          status: "commit-unknown", prompt: secret,
+        },
+        conversationTargetId: "target-1",
+      });
+      throw Object.assign(new Error(secret), { code: "OUTBOUND_COMMIT_UNCERTAIN" });
+    },
+  });
+  const created = await f.supervisor.create({
+    workspaceId: "main", instruction: "test uncertain send",
+  });
+  const failed = await waitFor(() => {
+    const record = f.supervisor.get(created.taskId);
+    return record.status === "failed" && record;
+  });
+  assert.equal(calls, 2, "only the configured reconciliation attempts are permitted");
+  assert.equal(failed.retries, 1);
+  assert.equal(failed.error, "RECOVERY_RETRY_LIMIT_REACHED");
+  assert.deepEqual(failed.recoveryHistory.map(entry => entry.action), ["retry", "stop"]);
+  assert.ok(failed.recoveryHistory.every(entry => entry.reason === "PENDING_OUTBOUND"));
+  assert.equal(failed.recoveryHistory[1].stopReason, "RECOVERY_RETRY_LIMIT_REACHED");
+  assert.equal(JSON.stringify(failed.recoveryHistory).includes(secret), false);
+  const durableEvents = await f.supervisor.getEvents(created.taskId);
+  assert.equal(durableEvents.filter(event => event.payload?.recovery).length, 2);
+});
+
+test("RR-02 blocks uncertain commit with conflicting browser target", async (t) => {
+  const secret = "SECRET_TARGET_MISMATCH_abc123";
+  let calls = 0;
+  const f = await fixture(t, {
+    execute: async ({ session }) => {
+      calls++;
+      await session.update({
+        runCount: 1, phase: "interrupted",
+        pendingOutbound: {
+          outboundId: "outbound-1", conversationTargetId: "different-target",
+          status: "commit-unknown", prompt: secret,
+        },
+        conversationTargetId: "original-target",
+      });
+      throw Object.assign(new Error(secret), { code: "OUTBOUND_COMMIT_UNCERTAIN" });
+    },
+  });
+  const created = await f.supervisor.create({
+    workspaceId: "main", instruction: "test mismatched send",
+  });
+  const blocked = await waitFor(() => {
+    const record = f.supervisor.get(created.taskId);
+    return record.status === "blocked_uncertain" && record;
+  });
+  assert.equal(calls, 1);
+  assert.equal(blocked.retries, 0);
+  assert.equal(blocked.error, "CONVERSATION_TARGET_MISMATCH");
+  assert.equal(blocked.recoveryHistory.length, 1);
+  assert.equal(blocked.recoveryHistory[0].action, "block");
+  assert.equal(blocked.recoveryHistory[0].reason, "CONVERSATION_TARGET_MISMATCH");
+  assert.equal(blocked.recoveryHistory[0].stopReason, "CONVERSATION_TARGET_MISMATCH");
+  assert.equal(JSON.stringify(blocked.recoveryHistory).includes(secret), false);
+});

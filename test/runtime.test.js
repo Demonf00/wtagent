@@ -3203,10 +3203,12 @@ test("a pre-submit reconnect checkpoints the replacement target for recovery", a
     constructor() {
       super([]);
       this.sendCalls = 0;
+      this.sendOutboundIds = [];
     }
 
-    async sendMessage(text) {
+    async sendMessage(text, options = {}) {
       this.sendCalls += 1;
+      this.sendOutboundIds.push(options.outboundId);
       if (this.sendCalls === 1) {
         this.lastSendStatus = "not-submitted";
         throw new Error("Target page, context or browser has been closed");
@@ -3233,6 +3235,14 @@ test("a pre-submit reconnect checkpoints the replacement target for recovery", a
     runtimeForResume(session, firstAdapter).run(),
     /Connection closed after Send was clicked/,
   );
+  assert.equal(firstAdapter.sendCalls, 2);
+  assert.equal(firstAdapter.sendOutboundIds.length, 2);
+  assert.match(firstAdapter.sendOutboundIds[0], /^[0-9a-f-]{36}$/);
+  assert.equal(firstAdapter.sendOutboundIds[0], firstAdapter.sendOutboundIds[1],
+    "safe pre-submit retry must reuse the same outbound ID");
+  assert.equal(session.state.pendingOutbound.outboundId, firstAdapter.sendOutboundIds[0]);
+  assert.equal(firstAdapter.sentMessages.length, 1,
+    "uncertain second attempt must not trigger another submission");
   assert.equal(
     session.state.pendingOutbound.conversationTargetId,
     "fake-target-after-reconnect",
@@ -3262,6 +3272,9 @@ test("a pre-submit reconnect checkpoints the replacement target for recovery", a
     resume: true,
   });
   assert.equal(result.message, "Recovered on T2.");
+  assert.deepEqual(recoveryAdapter.sentMessages, []);
+  assert.equal(recoveryAdapter.reconciliationCalls[0].pendingOutbound.outboundId,
+    firstAdapter.sendOutboundIds[0]);
   assert.deepEqual(
     recoveryAdapter.recoveryTargetCalls,
     ["fake-target-after-reconnect"],
@@ -4043,4 +4056,51 @@ test("RR-01 duplicate tool proposal after dropped result acknowledgement execute
     "only once");
   assert.equal(restored.state.pendingToolResult, null);
   assert.equal(Object.values(restored.state.sideEffectTools).length, 1);
+});
+
+test("RR-02 proven not-submitted send retries once with one handoff identity", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "wtagent-rr02-send-"));
+  const projectRoot = path.join(base, "project");
+  const sessionsDir = path.join(base, "sessions");
+  await fs.mkdir(projectRoot);
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  class RetryBeforeSubmitAdapter extends FakeWebModelAdapter {
+    constructor(responses) {
+      super(responses);
+      this.attemptedOutboundIds = [];
+      this.reconnectCount = 0;
+    }
+    async sendMessage(message, options = {}) {
+      this.attemptedOutboundIds.push(options.outboundId);
+      if (this.attemptedOutboundIds.length === 1) {
+        this.lastSendStatus = "not-submitted";
+        throw new Error("Target page, context or browser has been closed");
+      }
+      return await super.sendMessage(message, options);
+    }
+    async reconnect() {
+      this.reconnectCount++;
+    }
+  }
+  const adapter = new RetryBeforeSubmitAdapter([
+    "<agent_response><done>true</done><message>Submitted once.</message></agent_response>",
+  ]);
+  const session = await TaskSession.create({
+    sessionsDir, task: "Retry proven not-submitted once", projectRoot, mode: null,
+  });
+  const result = await runtimeForResume(session, adapter).run();
+  assert.equal(result.message, "Submitted once.");
+  assert.equal(adapter.reconnectCount, 1);
+  assert.equal(adapter.attemptedOutboundIds.length, 2);
+  assert.equal(adapter.attemptedOutboundIds[0], adapter.attemptedOutboundIds[1]);
+  assert.equal(adapter.sentOutboundIds.length, 1);
+  assert.equal(adapter.sentOutboundIds[0], adapter.attemptedOutboundIds[0]);
+  assert.equal(adapter.sentMessages.length, 1);
+  assert.equal(session.state.pendingOutbound, null);
+  assert.equal(session.state.pendingAssistantTurn, null);
+  const transcript = await session.readTranscript();
+  const handoffEntries = transcript.items.filter(item =>
+    typeof item.idempotencyKey === "string"
+    && item.idempotencyKey.includes(adapter.attemptedOutboundIds[0]));
+  assert.ok(handoffEntries.length <= 1, "no duplicate outbound transcript identity");
 });

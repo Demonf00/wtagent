@@ -102,6 +102,41 @@ export function incidentSummary({ error, state, reason, retries, workerHealth } 
  * Event payloads are deliberately stripped of browser text, prompt content,
  * tool arguments, screenshots, credentials and raw exception messages.
  */
+/**
+ * A sanitized, durable decision for one failed Worker attempt. This is
+ * intentionally independent of browser text and exception messages.
+ */
+export function recoveryDecision({ status, incident, attempts, retries, retryAt, stopReason } = {}) {
+  const actions = {
+    waiting_retry: "retry",
+    blocked_uncertain: "block",
+    failed: "stop",
+    paused: "pause",
+    completed: "complete",
+  };
+  const action = actions[status];
+  if (!action) return null;
+  const safeCode = value => typeof value === "string" && SAFE_CODES.test(value)
+    ? value : "UNCLASSIFIED";
+  return {
+    action,
+    code: safeCode(incident?.code),
+    reason: safeCode(incident?.reason),
+    attempts: Number.isSafeInteger(attempts) && attempts >= 0 ? attempts : 0,
+    retries: Number.isSafeInteger(retries) && retries >= 0 ? retries : 0,
+    retryAt: action === "retry" && typeof retryAt === "string"
+      && Number.isFinite(Date.parse(retryAt)) ? retryAt : null,
+    stopReason: action === "retry" ? null : safeCode(stopReason),
+    recordedAt: typeof incident?.recordedAt === "string"
+      && !Number.isNaN(Date.parse(incident.recordedAt))
+      ? new Date(incident.recordedAt).toISOString() : new Date().toISOString(),
+  };
+}
+
+/**
+ * Event payloads are deliberately stripped of browser text, prompt content,
+ * tool arguments, screenshots, credentials and raw exception messages.
+ */
 export function safeRuntimeEvent(event) {
   const type = typeof event?.type === "string"
     && /^[a-z][a-z0-9_.-]{0,63}$/.test(event.type)
