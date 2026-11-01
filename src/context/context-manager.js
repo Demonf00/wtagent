@@ -68,7 +68,12 @@ async function hasActiveSupervisorTasks(session) {
 
 export async function inspectSessionContext(session, options = {}) {
   await session.validateDirectory();
-  const rollout = path.join(session.directory, session.state.rolloutFile);
+  const rolloutName = session.state.rolloutFile;
+  if (typeof rolloutName !== "string" || rolloutName !== path.basename(rolloutName)
+    || !/^[A-Za-z0-9_.-]+$/.test(rolloutName)) {
+    throw new Error("Unsafe transcript filename in session state");
+  }
+  const rollout = path.join(session.directory, rolloutName);
   const size = await fs.stat(rollout).then((stat) => stat.size).catch((error) => {
     if (error.code === "ENOENT") return 0;
     throw error;
