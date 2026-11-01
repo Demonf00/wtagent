@@ -3,6 +3,13 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { TaskCoordinator } from "../src/autonomy/task-coordinator.js";
+import {
+  buildCanonicalContextManifest,
+  MAX_CANONICAL_MANIFEST_BYTES,
+} from "../src/context/canonical-manifest.js";
 import { AgentSession } from "../src/session/agent-session.js";
 import {
   contextSafety, contextPressure, buildContextHandoff,
@@ -138,4 +145,234 @@ test("successive clean rotations preserve the original goal instead of nesting p
   );
   assert.equal(parsed.originalGoal, "Build a small web app");
   assert.equal(parsed.oldTurnCount, 37);
+});
+
+
+async function canonicalFixture(t) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "wtagent-cm01-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const workspaceRoot = path.join(root, "workspace");
+  await fs.mkdir(workspaceRoot, { recursive: true });
+  function git(...args) {
+    return execFileSync("git", args, {
+      cwd: workspaceRoot, encoding: "utf8", windowsHide: true, timeout: 15000,
+    }).trim();
+  }
+  git("init", "-q");
+  git("config", "user.name", "Canonical Test");
+  git("config", "user.email", "canonical@example.invalid");
+  git("commit", "-q", "--allow-empty", "-m", "test initial state");
+  const sha = git("rev-parse", "HEAD");
+  const stateFile = path.join(root, "checkpoints", "coordinator.json");
+  const records = new Map();
+  const calls = [];
+  let initialWorkerStatus = "completed";
+  const supervisor = {
+    calls,
+    async create({ workspaceId, instruction, idempotencyKey }) {
+      const found = [...records.values()].find(r => r.idempotencyKey === idempotencyKey);
+      if (found) return { taskId: found.taskId };
+      const taskId = "task_" + randomUUID();
+      const record = {
+        taskId, workspaceId, workspaceRoot, idempotencyKey, instruction,
+        status: initialWorkerStatus,
+      };
+      records.set(taskId, record);
+      calls.push(instruction);
+      const label = /^build (one|two|three) SECRET_PAYLOAD_NOT_FOR_MANIFEST$/.exec(instruction)?.[1];
+      if (label) await fs.writeFile(path.join(workspaceRoot, label + ".txt"),
+        "verified artifact " + label);
+      return { taskId };
+    },
+    get(taskId) {
+      const record = records.get(taskId);
+      if (!record) throw Error("Unknown supervisor task");
+      return { ...record };
+    },
+    setCreationStatus(status) { initialWorkerStatus = status; },
+    mutateRecord(taskId, patch) {
+      const record = records.get(taskId);
+      if (!record) throw Error("Unknown supervisor task");
+      Object.assign(record, patch);
+    },
+    setStatus(taskId, status) {
+      const record = records.get(taskId);
+      if (!record) throw Error("Unknown supervisor task");
+      record.status = status;
+    },
+  };
+  const sensitiveGoal =
+    "build private token sk-EXAMPLE_DO_NOT_LEAK and internal instructions";
+  const plan = {
+    goal: sensitiveGoal,
+    tasks: ["one", "two", "three"].map((id, i, ids) => ({
+      id, instruction: "build " + id + " SECRET_PAYLOAD_NOT_FOR_MANIFEST",
+      dependsOn: i === 0 ? [] : [ids[i - 1]],
+      acceptance: [{ kind: "file", path: id + ".txt" }],
+    })),
+  };
+  const coordinator = await TaskCoordinator.create({
+    stateFile, workspaceRoot, workspaceId: "main", supervisor, plan,
+  });
+  return { root, workspaceRoot, stateFile, supervisor, coordinator, plan, sha, git };
+}
+
+test("CM-01 canonical manifest uses validated checkpoint and actual Git HEAD", async t => {
+  const f = await canonicalFixture(t);
+  const args = {
+    stateFile: f.stateFile, workspaceRoot: f.workspaceRoot,
+    workspaceId: "main", supervisor: f.supervisor,
+  };
+  const state = f.coordinator.getState();
+  const result = await buildCanonicalContextManifest(args);
+  assert.equal(result.schema, 1);
+  assert.equal(result.authority, "validated-task-coordinator-checkpoint");
+  assert.equal(result.planId, state.planId);
+  assert.equal(result.planRevision, 0);
+  assert.equal(result.goalId.length, 64);
+  assert.equal(result.source.currentHeadSha, f.sha);
+  assert.equal(result.source.clean, true);
+  assert.equal(result.nextAction.action, "START_TASK");
+  assert.equal(result.nextAction.taskId, "one");
+  assert.deepEqual(result.tasks.map(task => task.status), ["TODO", "TODO", "TODO"]);
+  const output = JSON.stringify(result);
+  assert.ok(Buffer.byteLength(output, "utf8") <= MAX_CANONICAL_MANIFEST_BYTES);
+  assert.doesNotMatch(output, /sk-EXAMPLE|SECRET_PAYLOAD|internal instructions|example.invalid/);
+
+  // Never reuse a previous in-memory "summary" or status when the checkpoint
+  // has since advanced. Each manifest call reconstructs the authority.
+  await f.coordinator.tick();
+  const next = await buildCanonicalContextManifest(args);
+  assert.equal(next.tasks[0].status, "VERIFIED");
+  assert.match(next.tasks[0].receiptSha256, /^[a-f0-9]{64}$/);
+  assert.equal(next.nextAction.action, "START_TASK");
+  assert.equal(next.nextAction.taskId, "two");
+  assert.equal(f.supervisor.calls.length, 1);
+  assert.doesNotMatch(JSON.stringify(next), /verified artifact|SECRET_PAYLOAD/);
+
+  await fs.writeFile(path.join(f.workspaceRoot, "untracked.txt"), "local work");
+  const dirty = await buildCanonicalContextManifest(args);
+  assert.equal(dirty.source.clean, false);
+  assert.ok(dirty.hazards.includes("WORKTREE_DIRTY"));
+});
+
+test("CM-01 canonical manifest reports existing Worker and survives Coordinator restart", async t => {
+  const f = await canonicalFixture(t);
+  const args = {
+    stateFile: f.stateFile, workspaceRoot: f.workspaceRoot,
+    workspaceId: "main", supervisor: f.supervisor,
+  };
+  await f.coordinator.tick();
+  const state = await f.coordinator.tick();
+  const runningTask = state.tasks.find(task => task.id === "two");
+  assert.equal(runningTask.status, "VERIFIED");
+  const result = await buildCanonicalContextManifest(args);
+  assert.equal(result.tasks[0].status, "VERIFIED");
+  assert.equal(result.tasks[1].status, "VERIFIED");
+  assert.equal(result.nextAction.action, "START_TASK");
+  assert.equal(result.nextAction.taskId, "three");
+  const reloaded = await TaskCoordinator.load(args);
+  assert.equal(reloaded.getState().planId, result.planId);
+  assert.equal(f.supervisor.calls.length, 2);
+});
+
+test("CM-01 rejects missing checkpoint and unavailable Git identity rather than guessing", async t => {
+  const f = await canonicalFixture(t);
+  const args = {
+    stateFile: f.stateFile, workspaceRoot: f.workspaceRoot,
+    workspaceId: "main", supervisor: f.supervisor,
+  };
+  await assert.rejects(buildCanonicalContextManifest({
+    ...args, stateFile: path.join(f.root, "absent.json"),
+  }), { code: "CANONICAL_STATE_UNAVAILABLE" });
+  await fs.rm(path.join(f.workspaceRoot, ".git"), { recursive: true, force: true });
+  await assert.rejects(buildCanonicalContextManifest(args),
+    { code: "CANONICAL_SOURCE_UNAVAILABLE" });
+});
+
+test("CM-01 rejects corrupt checkpoint and missing verification receipt", async t => {
+  const f = await canonicalFixture(t);
+  const args = {
+    stateFile: f.stateFile, workspaceRoot: f.workspaceRoot,
+    workspaceId: "main", supervisor: f.supervisor,
+  };
+  await f.coordinator.tick();
+  const state = JSON.parse(await fs.readFile(f.stateFile, "utf8"));
+  assert.equal(state.tasks[0].status, "VERIFIED");
+  state.tasks[0].verificationReceipt = null;
+  await fs.writeFile(f.stateFile, JSON.stringify(state));
+  await assert.rejects(buildCanonicalContextManifest(args),
+    { code: "CANONICAL_STATE_UNSAFE" });
+});
+
+test("CM-01 canonical manifest never fabricates failed task recovery", async t => {
+  const f = await canonicalFixture(t);
+  const args = {
+    stateFile: f.stateFile, workspaceRoot: f.workspaceRoot,
+    workspaceId: "main", supervisor: f.supervisor,
+  };
+  await f.coordinator.tick();
+  const existing = await buildCanonicalContextManifest(args);
+  assert.equal(existing.tasks[0].status, "VERIFIED");
+  assert.equal(existing.tasks[1].status, "TODO");
+  assert.equal(existing.tasks[2].status, "TODO");
+  const stat = await fs.stat(f.stateFile);
+  assert.ok(stat.isFile());
+  assert.equal(f.supervisor.calls.length, 1);
+});
+
+
+test("CM-01 canonical manifest represents in-flight and paused Worker state", async t => {
+  const f=await canonicalFixture(t);
+  const args={
+    stateFile:f.stateFile,workspaceRoot:f.workspaceRoot,
+    workspaceId:"main",supervisor:f.supervisor,
+  };
+  f.supervisor.setCreationStatus("running");
+  const started=await f.coordinator.tick();
+  assert.equal(started.tasks[0].status,"RUNNING");
+  const workerId=started.tasks[0].supervisorTaskId;
+  assert.ok(workerId);
+  const manifest=await buildCanonicalContextManifest(args);
+  assert.equal(manifest.nextAction.action,"MONITOR_WORKER");
+  assert.equal(manifest.nextAction.taskId,"one");
+  assert.equal(manifest.tasks[0].status,"RUNNING");
+  assert.equal(manifest.tasks[0].submissionPending,false);
+  assert.equal(f.supervisor.calls.length,1);
+
+  f.supervisor.setStatus(workerId,"paused");
+  const paused=await buildCanonicalContextManifest(args);
+  assert.equal(paused.nextAction.action,"RESUME_WORKER");
+  assert.equal(paused.nextAction.taskId,"one");
+  assert.equal(f.supervisor.calls.length,1);
+  assert.doesNotMatch(JSON.stringify(paused),/SECRET_PAYLOAD_NOT_FOR_MANIFEST/);
+
+  f.supervisor.mutateRecord(workerId,{instruction:"forged mutation"});
+  await assert.rejects(buildCanonicalContextManifest(args),
+    {code:"CANONICAL_STATE_UNSAFE"});
+  assert.equal(f.supervisor.calls.length,1);
+});
+
+test("CM-01 Git source follows actual HEAD changes without changing verified task evidence",async t=>{
+  const f=await canonicalFixture(t);
+  const args={
+    stateFile:f.stateFile,workspaceRoot:f.workspaceRoot,
+    workspaceId:"main",supervisor:f.supervisor,
+  };
+  await f.coordinator.tick();
+  const first=await buildCanonicalContextManifest(args);
+  assert.equal(first.source.currentHeadSha,f.sha);
+  assert.equal(first.source.clean,false);
+  assert.ok(first.hazards.includes("WORKTREE_DIRTY"));
+  assert.match(first.tasks[0].receiptSha256,/^[a-f0-9]{64}$/);
+  f.git("add","one.txt");
+  f.git("commit","-q","-m","next local version");
+  const second=await buildCanonicalContextManifest(args);
+  assert.notEqual(second.source.currentHeadSha,first.source.currentHeadSha);
+  assert.equal(second.source.clean,true);
+  assert.equal(second.goalId,first.goalId);
+  assert.equal(second.planId,first.planId);
+  assert.equal(second.tasks[0].receiptSha256,first.tasks[0].receiptSha256);
+  assert.equal(second.nextAction.action,"START_TASK");
+  assert.equal(second.nextAction.taskId,"two");
 });
