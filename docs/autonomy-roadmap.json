@@ -750,7 +750,7 @@
     {
       "id": "OB-03",
       "phase": "Observability and Delivery",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "OB-02"
       ],
@@ -766,14 +766,19 @@
         "No status inferred from model prose",
         "Reproducible report from checkpoint"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "b27fbd8dcb8c12937d1ee2c98a263e5e40b02811",
+      "testEvidence": {
+        "syntax": "npm run check: Syntax OK, 198 files",
+        "fullSuite": "npm test: 1001 total; 988 passed, 0 failed, 13 skipped",
+        "focused": "18/18 relevant tests passed: genuine FV-06 goal-delivery receipts, successful reattachment, missing acceptance, forged evidence, approvals, artifact drift, and deterministic reports",
+        "diff": "git diff --check and git diff --cached --check passed"
+      },
+      "notes": "Added read-only autonomy delivery-report with individual task and final acceptance evidence, unmet requirements, approval state, available artifact integrity observations, and deterministic report digest. Uses actual verification receipts rather than model prose. Historical tests are not rerun; receipts are consistency checks, not digital signatures."
     },
     {
       "id": "SU-01",
       "phase": "Controlled Self-Upgrade",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "OB-03"
       ],
