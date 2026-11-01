@@ -473,7 +473,7 @@
     {
       "id": "DP-02",
       "phase": "Dynamic Planning",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "DP-01"
       ],
@@ -489,14 +489,19 @@
         "Ignore legitimate long-running verification",
         "Trigger limited replan without falsely marking done"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "7cc5a1a93a08e2769b50660ce6eec0a905b7820e",
+      "testEvidence": {
+        "full": "node --test: 934 total, 921 passed, 13 skipped, 0 failed",
+        "syntax": "node scripts/check-syntax.js: 181 files",
+        "diff": "git diff --check: passed",
+        "focused": "12 DP-02 tests passed; 49 coordinator/replanning regression tests passed before final hardening"
+      },
+      "notes": "Sanitized Supervisor tool classifications provide durable, privacy-preserving evidence of consecutive successful read-only investigation. Pauses are requested after 12 completed read-only operations; long-running commands, tests and process polling are excluded. At most 2 replan attempts are allowed; exhaustion requests a safe pause and intervention, never task completion. Durable event cursors, paused Worker identity and revisions are guarded against restart replay and stale Coordinator writes."
     },
     {
       "id": "DP-03",
       "phase": "Dynamic Planning",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "DP-02"
       ],
