@@ -18,7 +18,7 @@ export const CHECKS = Object.freeze([
   { name: "supervisor-regression", program: "node", args: [
     "--test", "test/supervisor-worker.test.js", "test/supervisor-lifecycle.test.js",
     "test/supervisor-recovery.test.js", "test/supervisor-conversation-cleanup.test.js",
-    "test/cli-supervisor-integration.test.js", "test/supervisor-approval-sync.test.js",
+    "test/cli-supervisor-integration.test.js", "test/supervisor-approval-sync.test.js", "test/supervisor-live-display.test.js",
     "test/browser-adapter.test.js",
   ] },
   { name: "all-tests", program: "npm", args: ["test"] },
