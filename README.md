@@ -332,6 +332,8 @@ Automatic rotation during an in-flight tool loop is **not yet enabled**: it is u
 
 ### Optional safe source synchronization after verified PR merge
 
+GitHub PR discovery and merged-PR status checks use the GitHub REST API directly; the `gh` CLI is not required. Public PR reads work without authentication. To publish verification feedback with `--post-comment`, provide `GH_TOKEN` or `GITHUB_TOKEN` with permission to create issue comments. Without a token, use local-only verification without `--post-comment`.
+
 The watcher deliberately does not update your development checkout merely because a PR passes tests. The developer/user must first merge that PR on GitHub. To opt in to automatic updates of a clean `feat/self-extension` checkout **after** such merges, run:
 
 ```powershell
