@@ -806,7 +806,7 @@
     {
       "id": "SU-02",
       "phase": "Controlled Self-Upgrade",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "SU-01"
       ],
@@ -822,14 +822,19 @@
         "Rollback points to exact prior artifact",
         "Explicit approval necessary for activation"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "bb12ea49ad26509e4d03b058990384b85ecc049c",
+      "testEvidence": {
+        "syntax": "npm run check: Syntax OK, 202 files",
+        "fullSuite": "npm test: 1009 total; 996 passed, 0 failed, 13 skipped",
+        "focused": "5/5 SU-02 tests passed: exact promotion, rollback, interactive approval, tamper rejection, forged candidate re-verification, non-TTY guard",
+        "diff": "git diff --check and git diff --cached --check passed"
+      },
+      "notes": "Added trusted re-verification of exact candidate SHA, SHA-256-verified local Git tar archives, human full-SHA approval for recorded promotion and rollback, persistent version records and audit events. Promotion and rollback modify only recorded pointers; no merge, publish, global install or running-process restart."
     },
     {
       "id": "SU-03",
       "phase": "Controlled Self-Upgrade",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "SU-02"
       ],
