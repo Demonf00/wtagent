@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { replaceFileAtomic } from "../shared/atomic-write.js";
 import { annotateCheckpointFailures } from "./failure-classifier.js";
 import { emptyRepairBudget, validateRepairBudget, reserveRepairAttempt, failRepairAttempt, repairStopReason } from "./repair-budget.js";
+import { buildRepairSubtask, assertRepairSubtask } from "./repair-subtask.js";
 import { executeCommandCheck, commandCheckHash } from "./command-verifier.js";
 import { makeVerificationReceipt, assertVerificationReceipt } from "./verification-receipt.js";
 import { assertSavedTestSummary } from "./test-summary.js";
@@ -382,6 +383,7 @@ export class TaskCoordinator {
       schema: 2, planId, workspaceRoot: root, workspaceId,
       goal: checked.goal, status: "RUNNING", lastError: null,
       repairBudget: emptyRepairBudget(),
+      repairSubtask: null,
       goalDelivery: {
         status: checked.finalAcceptance?.length ? "PENDING" : "UNVERIFIED",
         acceptance: checked.finalAcceptance ?? [],
@@ -492,6 +494,15 @@ export class TaskCoordinator {
     } catch {
       throw invalid("Invalid persisted repair budget.", "STATE_UNSAFE");
     }
+    state.repairSubtask ??= null;
+    if (state.repairSubtask !== null) {
+      try {
+        const taskId = state.repairSubtask.sourceSupervisorTaskId;
+        assertRepairSubtask(state, state.repairSubtask, supervisor.get(taskId));
+      } catch {
+        throw invalid("Invalid persisted repair subtask.", "STATE_UNSAFE");
+      }
+    }
     annotateCheckpointFailures(state);
     return new TaskCoordinator({ stateFile: file, workspaceRoot: root, workspaceId, supervisor, state });
   }
@@ -502,6 +513,42 @@ export class TaskCoordinator {
 
   getDeliveryReport() {
     return buildDeliveryReport(this.state);
+  }
+
+
+  /**
+   * Atomically reserve the next attempt and prepare an evidence-backed repair.
+   * This method never creates a Supervisor task or grants tool permissions.
+   */
+  prepareRepairSubtask() {
+    const action = this.mutations.catch(() => {}).then(async () => {
+      if (this.state.status !== "BLOCKED") {
+        throw invalid("Repair requires a blocked checkpoint.", "REPAIR_NOT_BLOCKED");
+      }
+      if (this.state.repairSubtask !== null) {
+        const existing = this.state.repairSubtask;
+        assertRepairSubtask(this.state, existing,
+          this.supervisor.get(existing.sourceSupervisorTaskId));
+        return snapshot(existing);
+      }
+      const { budget, attempt } = reserveRepairAttempt(
+        this.state.repairBudget, this.state.lastError,
+      );
+      const candidateState = { ...this.state, repairBudget: budget };
+      const blockedTask = candidateState.tasks.find(task => task.status === "BLOCKED");
+      const supervisorTask = blockedTask?.supervisorTaskId
+        ? this.supervisor.get(blockedTask.supervisorTaskId) : null;
+      const proposal = buildRepairSubtask(candidateState, {
+        sequence: attempt.sequence,
+        supervisorTask,
+      });
+      this.state.repairBudget = budget;
+      this.state.repairSubtask = proposal;
+      await this.#save();
+      return snapshot(proposal);
+    });
+    this.mutations = action;
+    return action;
   }
 
   /**
@@ -543,6 +590,7 @@ export class TaskCoordinator {
         sequence, errorCode,
       });
       this.state.repairBudget = budget;
+      this.state.repairSubtask = null;
       await this.#save();
       return { stopCode, budget: snapshot(budget) };
     });
@@ -553,6 +601,11 @@ export class TaskCoordinator {
   async #save() {
     this.state.repairBudget = validateRepairBudget(this.state.repairBudget);
     annotateCheckpointFailures(this.state);
+    if (this.state.repairSubtask != null) {
+      const proposal = this.state.repairSubtask;
+      assertRepairSubtask(this.state, proposal,
+        this.supervisor.get(proposal.sourceSupervisorTaskId));
+    }
     await persist(this.stateFile, this.state);
   }
 
