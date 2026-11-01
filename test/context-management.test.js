@@ -118,3 +118,24 @@ test("bounded summaries never claim historical transcript is authoritative", asy
   assert.ok(Buffer.byteLength(prompt, "utf8") <= 9000);
   assert.match(prompt, /not a verbatim history or proof/);
 });
+
+
+test("successive clean rotations preserve the original goal instead of nesting prior handoff prompts", async (t) => {
+  const { session, sessionsDir } = await fixture(t);
+  const first = await prepareContextRotation({ session, sessionsDir });
+  await first.next.update({
+    phase: "idle", turn: 37, runCount: 1,
+    lastMessage: "Inspected repository; no unsafe replays.",
+  });
+  const second = await prepareContextRotation({
+    session: first.next, sessionsDir,
+  });
+  assert.equal(second.next.state.rootContextGoal, "Build a small web app");
+  assert.equal(second.next.state.contextGeneration, 2);
+  assert.equal(second.next.state.task.includes("<previous_context_json>"), true);
+  const parsed = JSON.parse(
+    second.next.state.task.split("<previous_context_json>")[1].split("</previous_context_json>")[0],
+  );
+  assert.equal(parsed.originalGoal, "Build a small web app");
+  assert.equal(parsed.oldTurnCount, 37);
+});
