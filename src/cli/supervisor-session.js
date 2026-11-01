@@ -109,8 +109,10 @@ function emitProgress(events, output) {
 for (const event of events) {
 if (event.type === "worker.started") {
 output(`[Supervisor] Worker started (pid=${event.payload?.pid ?? "unknown"})`);
-} else if (event.type === "runtime.initializing" || event.type.startsWith("tool.")
+} else if (event.type === "runtime.initializing"
 || event.type === "model.message_complete" || event.type === "run.completed") {
+  // Individual tool events are now shown by the transient live display
+  // channel, so avoid a duplicate anonymous "[Worker] tool.*" line.
 output(`[Worker] ${event.type}`);
 }
 }
