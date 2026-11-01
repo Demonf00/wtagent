@@ -60,7 +60,10 @@ async function hasActiveSupervisorTasks(session) {
   });
   for (const file of files) {
     if (!/^task_[0-9a-f-]{36}\.json$/.test(file)) continue;
-    const record = JSON.parse(await fs.readFile(path.join(directory, file), "utf8"));
+    const taskFile = path.join(directory, file);
+    const item = await fs.lstat(taskFile);
+    if (!item.isFile() || item.isSymbolicLink()) return true;
+    const record = JSON.parse(await fs.readFile(taskFile, "utf8"));
     if (ACTIVE.has(record.status)) return true;
   }
   return false;
@@ -74,7 +77,12 @@ export async function inspectSessionContext(session, options = {}) {
     throw new Error("Unsafe transcript filename in session state");
   }
   const rollout = path.join(session.directory, rolloutName);
-  const size = await fs.stat(rollout).then((stat) => stat.size).catch((error) => {
+  const size = await fs.lstat(rollout).then((stat) => {
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error("Context transcript must be a regular file, not a link");
+    }
+    return stat.size;
+  }).catch((error) => {
     if (error.code === "ENOENT") return 0;
     throw error;
   });
