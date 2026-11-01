@@ -8,6 +8,7 @@ import { inspectPlannedWorkResumption } from "../context/planned-work-resumption
 import { buildDeliveryReport } from "../autonomy/goal-delivery.js";
 import { GoalPlanner } from "../autonomy/goal-planner.js";
 import { TaskSupervisor } from "../supervisor/task-supervisor.js";
+import { formatLiveEvent } from "../supervisor/live-display.js";
 import { resolveRuntimePaths } from "../runtime/conversation-runner.js";
 import { isProcessAlive } from "../browser/cdp-state.js";
 
@@ -166,6 +167,13 @@ export async function runAutonomyCommand({
   try {
     const paths = resolveRuntimePaths(options);
     supervisor = createSupervisor({
+      // Tool echo remains transient. Never print raw model messages or
+      // tool arguments, and never copy live display events to durable files.
+      onDisplay: (event) => {
+        if (typeof event?.type !== "string" || !event.type.startsWith("tool.")) return;
+        const line = formatLiveEvent(event);
+        if (line) output(line);
+      },
       dataDir: `${file}.supervisor`,
       sessionsDir: paths.sessionsDir,
       workspaces: [{ id: WORKSPACE_ID, root: workspaceRoot }],

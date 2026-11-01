@@ -33,6 +33,7 @@ import { inspectSessionContext, prepareContextRotation } from "../context/contex
 import { runAutonomyCommand } from "./autonomy-command.js";
 import { runDurableOrchestrator, readDurableOrchestratorState } from "../autonomy/durable-orchestrator.js";
 import { createHeartbeatNotifier } from "../supervisor/heartbeat-notifier.js";
+import { readAutonomyProgress } from "./progress-command.js";
 import {
   inspectOrchestratorOwner, recoverStaleOrchestratorOwner,
 } from "../autonomy/orchestrator-ownership.js";
@@ -1008,6 +1009,19 @@ autonomyCommand
     });
     console.log(`[Orchestrator] ${result.status}; checkpoint=${opts.state}.orchestrator.json`);
     if (result.status !== "COMPLETE") process.exitCode = 1;
+  });
+
+autonomyCommand
+  .command("progress")
+  .description("Reattach to durable goal, task, verification and sanitized tool progress")
+  .requiredOption("--state <path>", "Existing autonomy execution checkpoint")
+  .action(async (_, command) => {
+    const opts=command.optsWithGlobals();
+    const result=await readAutonomyProgress({
+      stateFile:opts.state,
+      workspaceRoot:opts.project??process.cwd(),
+    });
+    console.log(JSON.stringify(result,null,2));
   });
 
 autonomyCommand
