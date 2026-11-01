@@ -417,7 +417,7 @@
     {
       "id": "FR-04",
       "phase": "Failure Resolution",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "FR-03"
       ],
@@ -433,14 +433,20 @@
         "Exhausted repair remains BLOCKED",
         "Restart midway does not duplicate side effects"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "a6da443545b3f5f4e15bd95f828bfb1e380383dd",
+      "testEvidence": {
+        "full": "node --test: 912 total, 899 passed, 13 skipped, 0 failed",
+        "syntax": "node scripts/check-syntax.js: 178 files",
+        "cli": "node src/cli/main.js autonomy --help: repair command registered",
+        "diff": "git diff --check: passed",
+        "regression": "Repair execution, CLI integration, restart recovery, checkpoint-write fault injection, budgets and original verification checks passed"
+      },
+      "notes": "Explicit bounded repair execution with durable Supervisor idempotency, independent verification and original task receipts before advancing. Crash/resume does not duplicate side effects; failed repair stays BLOCKED; disk persistence errors never count as verification failure."
     },
     {
       "id": "DP-01",
       "phase": "Dynamic Planning",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "FR-04"
       ],
