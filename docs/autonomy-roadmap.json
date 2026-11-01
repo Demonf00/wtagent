@@ -76,7 +76,7 @@
     {
       "id": "FV-02",
       "phase": "Functional Verification",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "FV-01"
       ],
@@ -91,14 +91,28 @@
         "No shell execution, path escape or arbitrary code elevation",
         "Failure never yields VERIFIED"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "cc9a4ededf5ab644bfa66f31d3af494c62d1f306",
+      "testEvidence": {
+        "syntax": "158 files OK",
+        "specialized": {
+          "passed": 26,
+          "failed": 0,
+          "skipped": 0
+        },
+        "full": {
+          "tests": 848,
+          "passed": 835,
+          "failed": 0,
+          "skipped": 13
+        },
+        "windowsLiveBrowser": "NOT_RUN"
+      },
+      "notes": "Real bounded npm/node acceptance; fail-closed spawn, timeout, unknown completion, nonzero exit; persisted command proofs and crash-safe no-replay behavior. OS-level sandbox not claimed."
     },
     {
       "id": "FV-03",
       "phase": "Functional Verification",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "FV-02"
       ],
