@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { replaceFileAtomic } from "../shared/atomic-write.js";
+import { executeCommandCheck, commandCheckHash } from "./command-verifier.js";
 
 const TASK_ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 const HASH = /^[a-f0-9]{64}$/;
@@ -72,13 +73,6 @@ function validateCommandCheck(check) {
   }
   return { kind: "command", program: check.program, argv: [...args],
     cwd: ".", timeoutMs };
-}
-
-function assertCommandVerifierAvailable(tasks) {
-  if (tasks.some((task) => task.acceptance.some((check) => check.kind === "command"))) {
-    throw invalid("Command verification is not implemented yet; refusing unverified execution.",
-      "VERIFIER_UNAVAILABLE");
-  }
 }
 
 export function validateTaskPlan(input) {
@@ -177,6 +171,10 @@ async function artifactEvidence(root, check) {
 async function captureBaseline(root, task) {
   const baseline = [];
   for (const check of task.acceptance) {
+    if (check.kind === "command") {
+      baseline.push({ kind: "command", checkHash: commandCheckHash(check) });
+      continue;
+    }
     let candidate = root;
     let missing = false;
     for (const segment of check.path.split("/")) {
@@ -212,20 +210,41 @@ async function captureBaseline(root, task) {
 
 async function verifyArtifacts(root, task, evidence = null) {
   const results = [];
-  for (const check of task.acceptance) {
+  for (let index = 0; index < task.acceptance.length; index += 1) {
+    const check = task.acceptance[index];
+    const baseline = task.baseline?.[index];
+    if (check.kind === "command") {
+      const checkHash = commandCheckHash(check);
+      if (baseline?.kind !== "command" || baseline.checkHash !== checkHash) {
+        throw invalid("Missing or mismatched command baseline.", "STATE_UNSAFE");
+      }
+      if (evidence) {
+        const prior = evidence[index];
+        if (!prior || prior.kind !== "command" || prior.checkHash !== checkHash
+          || prior.exitCode !== 0 || prior.timedOut !== false || prior.signal !== null) {
+          throw invalid("Command verification evidence is missing or invalid.", "VERIFIER_EVIDENCE_INVALID");
+        }
+        results.push(prior);
+      } else {
+        results.push(await executeCommandCheck(root, check));
+      }
+      continue;
+    }
     const proof = await artifactEvidence(root, check);
-    const baseline = task.baseline?.find((item) => item.path === check.path);
-    if (!baseline) {
+    if (!baseline || baseline.path !== check.path) {
       throw invalid(`Missing persisted artifact baseline: ${check.path}`, "STATE_UNSAFE");
     }
     if (!check.sha256 && baseline.sha256 !== null && baseline.sha256 === proof.sha256) {
       throw invalid(`Artifact unchanged since task submission: ${check.path}`, "ARTIFACT_UNCHANGED");
     }
-    const prior = evidence?.find((item) => item.path === check.path);
+    const prior = evidence?.[index];
     if (evidence && (!prior || prior.sha256 !== proof.sha256 || prior.bytes !== proof.bytes)) {
       throw invalid(`Verified artifact changed: ${check.path}`, "ARTIFACT_DRIFT");
     }
     results.push(proof);
+  }
+  if (evidence && evidence.length !== results.length) {
+    throw invalid("Verification evidence length mismatch.", "VERIFIER_EVIDENCE_INVALID");
   }
   return results;
 }
@@ -266,7 +285,6 @@ export class TaskCoordinator {
       if (error.code !== "ENOENT") throw error;
     }
     const checked = validateTaskPlan(plan);
-    assertCommandVerifierAvailable(checked.tasks);
     const planId = randomUUID();
     const state = {
       schema: 1, planId, workspaceRoot: root, workspaceId,
@@ -299,7 +317,6 @@ export class TaskCoordinator {
       throw invalid("Coordinator checkpoint identity mismatch.", "STATE_UNSAFE");
     }
     const checked = validateTaskPlan({ goal: state.goal, tasks: state.tasks });
-    assertCommandVerifierAvailable(checked.tasks);
     if (checked.tasks.length !== state.tasks.length
       || !["RUNNING", "VERIFIED", "BLOCKED"].includes(state.status)
       || (state.status === "VERIFIED"
@@ -311,9 +328,12 @@ export class TaskCoordinator {
       || (["RUNNING", "VERIFYING", "VERIFIED"].includes(task.status)
         && (!Array.isArray(task.baseline)
           || task.baseline.length !== task.acceptance.length
-          || task.baseline.some((item, index) =>
-            item?.path !== task.acceptance[index].path
-            || (item.sha256 !== null && !HASH.test(item.sha256)))))
+          || task.baseline.some((item, index) => {
+            const check = task.acceptance[index];
+            return check.kind === "command"
+              ? item?.kind !== "command" || item.checkHash !== commandCheckHash(check)
+              : item?.path !== check.path || (item.sha256 !== null && !HASH.test(item.sha256));
+          })))
       || (task.status === "VERIFIED" && !Array.isArray(task.evidence)))) {
       throw invalid("Invalid persisted task state.", "STATE_UNSAFE");
     }
@@ -436,8 +456,19 @@ export class TaskCoordinator {
 
     if (active.status === "VERIFYING") {
       try {
+        if (active.verificationStarted) {
+          throw invalid("Verification interrupted; previous command may have run.",
+            "VERIFIER_COMPLETION_UNKNOWN");
+        }
+        if (active.acceptance.some((check) => check.kind === "command")) {
+          // Persist before executing any project-controlled verification code.
+          // A crash after this boundary must never replay a possibly executed command.
+          active.verificationStarted = true;
+          await this.#save();
+        }
         active.evidence = await verifyArtifacts(this.workspaceRoot, active);
         active.status = "VERIFIED";
+        active.verificationStarted = false;
         active.error = null;
       } catch (error) {
         active.status = "BLOCKED";

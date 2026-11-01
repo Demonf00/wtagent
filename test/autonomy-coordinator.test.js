@@ -376,15 +376,118 @@ test("FV-01 rejects executable, shell, unsafe path and unbounded command declara
   }
 });
 
-test("FV-01 fail-closes a plan containing command checks before verifier implementation", async (t) => {
+test("FV-02 accepts command plans but cannot verify before Supervisor completes", async (t) => {
   const f = await fixture(t);
-  const supervisor = fakeSupervisor({ workspaceRoot: f.workspaceRoot });
+  const supervisor = fakeSupervisor({ workspaceRoot: f.workspaceRoot, status: "queued" });
   const proposed = plan();
   proposed.tasks[0].acceptance.push({
     kind: "command", program: "npm", argv: ["test"],
   });
-  await assert.rejects(TaskCoordinator.create({ ...f, supervisor, plan: proposed }),
-    { code: "VERIFIER_UNAVAILABLE" });
-  assert.equal(supervisor.calls.length, 0);
-  await assert.rejects(fs.stat(f.stateFile), { code: "ENOENT" });
+  const coordinator = await TaskCoordinator.create({ ...f, supervisor, plan: proposed });
+  const state = await coordinator.tick();
+  assert.equal(state.status, "RUNNING");
+  assert.equal(state.tasks[0].status, "RUNNING");
+  assert.equal(state.tasks[0].baseline[1].kind, "command");
+  assert.equal(state.tasks[0].evidence, null);
+  assert.equal(state.tasks[0].verificationStarted, undefined);
+  assert.deepEqual(supervisor.calls, ["build one"]);
+  const resumed = await TaskCoordinator.load({ ...f, supervisor });
+  assert.equal((await resumed.tick()).tasks[0].status, "RUNNING");
+  assert.deepEqual(supervisor.calls, ["build one"]);
+});
+
+
+test("FV-02 only real command completion allows VERIFIED and persists resumable evidence", async (t) => {
+  const f = await fixture(t);
+  await fs.mkdir(path.join(f.workspaceRoot, "test"));
+  await fs.writeFile(path.join(f.workspaceRoot, "test", "accept.test.js"),
+    'const test = require("node:test"); test("real pass", () => {});');
+  const supervisor = fakeSupervisor({
+    workspaceRoot: f.workspaceRoot,
+    outputs: { "build verified output": ["output.txt", "content"] },
+  });
+  const proposed = { goal: "Verify real command", tasks: [{
+    id: "check", instruction: "build verified output", dependsOn: [],
+    acceptance: [
+      { kind: "file", path: "output.txt", minBytes: 1 },
+      { kind: "command", program: "node",
+        argv: ["--test", "test/accept.test.js"], cwd: ".", timeoutMs: 10000 },
+    ],
+  }] };
+  const coordinator = await TaskCoordinator.create({ ...f, supervisor, plan: proposed });
+  const result = await coordinator.run({ timeoutMs: 15000, pollMs: 1 });
+  assert.equal(result.status, "VERIFIED", JSON.stringify(result.lastError));
+  assert.equal(result.tasks[0].evidence[1].kind, "command");
+  assert.equal(result.tasks[0].evidence[1].exitCode, 0);
+  assert.equal(result.tasks[0].verificationStarted, false);
+  const evidence = result.tasks[0].evidence[1];
+  const loaded = await TaskCoordinator.load({ ...f, supervisor });
+  const resumed = await loaded.tick();
+  assert.equal(resumed.status, "VERIFIED");
+  assert.deepEqual(resumed.tasks[0].evidence[1], evidence);
+  assert.deepEqual(supervisor.calls, ["build verified output"]);
+});
+
+test("FV-02 a failing real Node test blocks the task instead of reporting success", async (t) => {
+  const f = await fixture(t);
+  await fs.mkdir(path.join(f.workspaceRoot, "test"));
+  await fs.writeFile(path.join(f.workspaceRoot, "test", "accept.test.js"),
+    'const test = require("node:test"); test("real failure", () => { throw Error("failure"); });');
+  const supervisor = fakeSupervisor({ workspaceRoot: f.workspaceRoot });
+  const proposed = { goal: "Reject failing verifier", tasks: [{
+    id: "check", instruction: "run failing verifier", dependsOn: [],
+    acceptance: [{ kind: "command", program: "node",
+      argv: ["--test", "test/accept.test.js"], cwd: ".", timeoutMs: 10000 }],
+  }] };
+  const coordinator = await TaskCoordinator.create({ ...f, supervisor, plan: proposed });
+  const result = await coordinator.run({ timeoutMs: 15000, pollMs: 1 });
+  assert.equal(result.status, "BLOCKED");
+  assert.equal(result.lastError, "VERIFIER_COMMAND_FAILED");
+  assert.equal(result.tasks[0].status, "BLOCKED");
+  assert.equal(result.tasks[0].evidence, null);
+  assert.deepEqual(supervisor.calls, ["run failing verifier"]);
+});
+
+test("FV-02 forged or incomplete command evidence fails closed on resume", async (t) => {
+  const f = await fixture(t);
+  await fs.mkdir(path.join(f.workspaceRoot, "test"));
+  await fs.writeFile(path.join(f.workspaceRoot, "test", "accept.test.js"),
+    'const test = require("node:test"); test("pass", () => {});');
+  const supervisor = fakeSupervisor({ workspaceRoot: f.workspaceRoot });
+  const proposed = { goal: "Evidence integrity", tasks: [{
+    id: "check", instruction: "evidence check", dependsOn: [],
+    acceptance: [{ kind: "command", program: "node",
+      argv: ["--test", "test/accept.test.js"], cwd: ".", timeoutMs: 10000 }],
+  }] };
+  const coordinator = await TaskCoordinator.create({ ...f, supervisor, plan: proposed });
+  assert.equal((await coordinator.run({ timeoutMs: 15000, pollMs: 1 })).status, "VERIFIED");
+  const state = JSON.parse(await fs.readFile(f.stateFile, "utf8"));
+  state.tasks[0].evidence[0].exitCode = 1;
+  await fs.writeFile(f.stateFile, JSON.stringify(state));
+  const loaded = await TaskCoordinator.load({ ...f, supervisor });
+  const resumed = await loaded.tick();
+  assert.equal(resumed.status, "BLOCKED");
+  assert.equal(resumed.lastError, "VERIFIER_EVIDENCE_INVALID");
+});
+
+test("FV-02 interrupted in-flight command verification is not automatically replayed", async (t) => {
+  const f = await fixture(t);
+  const supervisor = fakeSupervisor({ workspaceRoot: f.workspaceRoot, status: "queued" });
+  const proposed = { goal: "No uncertain verification replay", tasks: [{
+    id: "check", instruction: "uncertain check", dependsOn: [],
+    acceptance: [{ kind: "command", program: "npm", argv: ["test"] }],
+  }] };
+  const coordinator = await TaskCoordinator.create({ ...f, supervisor, plan: proposed });
+  const running = await coordinator.tick();
+  assert.equal(running.tasks[0].status, "RUNNING");
+  const state = JSON.parse(await fs.readFile(f.stateFile, "utf8"));
+  state.tasks[0].status = "VERIFYING";
+  state.tasks[0].verificationStarted = true;
+  await fs.writeFile(f.stateFile, JSON.stringify(state));
+  supervisor.tasks.get(state.tasks[0].supervisorTaskId).status = "completed";
+  const loaded = await TaskCoordinator.load({ ...f, supervisor });
+  const resumed = await loaded.tick();
+  assert.equal(resumed.status, "BLOCKED");
+  assert.equal(resumed.lastError, "VERIFIER_COMPLETION_UNKNOWN");
+  assert.equal(resumed.tasks[0].evidence, null);
 });
