@@ -148,7 +148,7 @@
     {
       "id": "FV-04",
       "phase": "Functional Verification",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "FV-03"
       ],
@@ -163,14 +163,28 @@
         "Idempotent resume never duplicates Worker operations",
         "Interrupted verification retries only safe checks"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "5870e6e43584a60c8009d0850534069284d8b392",
+      "testEvidence": {
+        "syntax": "161 files OK",
+        "specialized": {
+          "passed": 36,
+          "failed": 0,
+          "skipped": 0
+        },
+        "full": {
+          "tests": 858,
+          "passed": 845,
+          "failed": 0,
+          "skipped": 13
+        },
+        "windowsLiveBrowser": "included in full suite"
+      },
+      "notes": "Read-only resume verifies bounded local source/test/config fingerprints; changes fail closed with VERIFIER_INPUT_DRIFT, no test-command replay. Inputs outside scoped roots and external dependencies are not covered."
     },
     {
       "id": "FV-05",
       "phase": "Functional Verification",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "FV-04"
       ],
