@@ -245,6 +245,13 @@ export async function runAutonomyCommand({
         output(`[Autonomy] ${progress}`);
         previous = progress;
       }
+      if (state.investigation?.monitor.replanRequired
+          || state.investigation?.monitor.budgetExhausted) {
+        output(state.investigation.monitor.budgetExhausted
+          ? "[Autonomy] Investigation replan budget exhausted; Worker pause requested. Intervention required."
+          : "[Autonomy] Investigation stalled; Worker pause requested. A revised DAG is required before continuing.");
+        return state;
+      }
       if (state.status === "VERIFIED" || (state.status === "BLOCKED" && !state.repairExecution)) {
         output(`[Autonomy] ${state.status}${state.lastError ? ` (${state.lastError})` : ""}`);
         const report = coordinator.getDeliveryReport();

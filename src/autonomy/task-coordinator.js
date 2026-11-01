@@ -4,6 +4,10 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { replaceFileAtomic } from "../shared/atomic-write.js";
 import { annotateCheckpointFailures } from "./failure-classifier.js";
+import {
+  initialInvestigationMonitor, validateInvestigationMonitor,
+  observeInvestigationEvents, MAX_STALL_REPLANS,
+} from "./investigation-stall.js";
 import { emptyRepairBudget, validateRepairBudget, reserveRepairAttempt, failRepairAttempt, succeedRepairAttempt, repairStopReason } from "./repair-budget.js";
 import { buildRepairSubtask, assertRepairSubtask } from "./repair-subtask.js";
 import { executeCommandCheck, commandCheckHash } from "./command-verifier.js";
@@ -422,6 +426,7 @@ export class TaskCoordinator {
       schema: 2, planId, workspaceRoot: root, workspaceId,
       goal: checked.goal, status: "RUNNING", lastError: null,
       planRevision: 0,
+      investigation: null,
       repairBudget: emptyRepairBudget(),
       repairSubtask: null,
       repairExecution: null,
@@ -460,6 +465,28 @@ export class TaskCoordinator {
     state.planRevision ??= 0;
     if (!Number.isSafeInteger(state.planRevision) || state.planRevision < 0) {
       throw invalid("Invalid plan revision.", "STATE_UNSAFE");
+    }
+    state.investigation ??= null;
+    if (state.investigation !== null) {
+      const record = state.investigation;
+      const matched = state.tasks.find(task => task.id === record?.taskId);
+      if (!matched || !matched.supervisorTaskId
+          || matched.supervisorTaskId !== record.supervisorTaskId
+          || !Number.isSafeInteger(record.revisionAtTrigger)
+          || record.revisionAtTrigger < 0
+          || record.revisionAtTrigger > state.planRevision
+          || typeof record.pauseRequested !== "boolean") {
+        throw invalid("Invalid investigation monitor identity.", "STATE_UNSAFE");
+      }
+      try {
+        record.monitor = validateInvestigationMonitor(record.monitor);
+      } catch {
+        throw invalid("Invalid investigation monitor state.", "STATE_UNSAFE");
+      }
+      if ((record.monitor.replanRequired || record.monitor.budgetExhausted)
+          && matched.status !== "RUNNING") {
+        throw invalid("Pending investigation replan requires a running task.", "STATE_UNSAFE");
+      }
     }
     const checked = validateTaskPlan({ goal: state.goal, tasks: state.tasks });
     if (checked.tasks.length !== state.tasks.length
@@ -586,6 +613,19 @@ export class TaskCoordinator {
         throw invalid("Plan changes require an active, unrepaired checkpoint.",
           "PLAN_REVISION_BLOCKED");
       }
+      if (this.state.investigation?.monitor.budgetExhausted) {
+        throw invalid("Investigation replan budget exhausted; intervention required.",
+          "PLAN_REVISION_BLOCKED");
+      }
+      if (this.state.investigation?.monitor.replanRequired) {
+        const pending = this.state.investigation;
+        const supervisorTask = this.supervisor.get(pending.supervisorTaskId);
+        if (supervisorTask.status !== "paused"
+            || pending.revisionAtTrigger !== expectedRevision) {
+          throw invalid("The stalled Worker must be safely paused before replanning.",
+            "PLAN_REVISION_BLOCKED");
+        }
+      }
       if (expectedRevision !== this.state.planRevision) {
         throw invalid("Expected plan revision is stale.", "PLAN_REVISION_CONFLICT");
       }
@@ -642,13 +682,25 @@ export class TaskCoordinator {
         if (disk.planId !== this.state.planId
             || (disk.planRevision ?? 0) !== expectedRevision
             || disk.status !== this.state.status
-            || JSON.stringify(disk.tasks) !== JSON.stringify(this.state.tasks)) {
+            || JSON.stringify(disk.tasks) !== JSON.stringify(this.state.tasks)
+            || JSON.stringify(disk.investigation ?? null)
+              !== JSON.stringify(this.state.investigation ?? null)) {
           throw invalid("Concurrent plan change or task advancement detected.",
             "PLAN_REVISION_CONFLICT");
         }
         const before = snapshot(this.state);
         this.state.tasks = replacement;
         this.state.planRevision = expectedRevision + 1;
+        if (this.state.investigation?.monitor.replanRequired) {
+          // Replanning never resets a started Worker or proof of its effects.
+          // A separate explicit resume is required for a paused Worker.
+          const m = this.state.investigation.monitor;
+          m.replanRequired = false;
+          m.readOnlyStreak = 0;
+          m.activeRead = false;
+          this.state.investigation.revisionAtTrigger = this.state.planRevision;
+          this.state.investigation.pauseRequested = false;
+        }
         try {
           await this.#save();
         } catch (error) {
@@ -874,6 +926,10 @@ export class TaskCoordinator {
   }
 
   async #save() {
+    if (this.state.investigation !== null) {
+      this.state.investigation.monitor =
+        validateInvestigationMonitor(this.state.investigation.monitor);
+    }
     if (!Number.isSafeInteger(this.state.planRevision)
         || this.state.planRevision < 0) {
       throw invalid("Invalid plan revision.", "STATE_UNSAFE");
@@ -939,6 +995,67 @@ export class TaskCoordinator {
       await this.#save();
     }
     return this.getState();
+  }
+
+
+  /**
+   * Observe only sanitized, durable Supervisor tool events. This never
+   * executes tools, verifies artifacts, or declares task success. The
+   * persisted pending request survives a crash before/while pausing.
+   */
+  async #observeInvestigation(active, supervisorTask) {
+    if (typeof this.supervisor.getEvents !== "function"
+        || typeof this.supervisor.pause !== "function"
+        || active.status !== "RUNNING"
+        || !active.supervisorTaskId) return false;
+    let record = this.state.investigation;
+    if (record?.supervisorTaskId !== active.supervisorTaskId) {
+      const budgetUsed = record?.monitor?.replanCount ?? 0;
+      const monitor = initialInvestigationMonitor();
+      monitor.replanCount = Math.min(MAX_STALL_REPLANS, budgetUsed);
+      record = {
+        taskId: active.id, supervisorTaskId: active.supervisorTaskId,
+        monitor, revisionAtTrigger: this.state.planRevision,
+        pauseRequested: false,
+      };
+      this.state.investigation = record;
+      await this.#save();
+    }
+    if (!record.monitor.replanRequired && !record.monitor.budgetExhausted
+        && supervisorTask.status !== "completed") {
+      const events = await this.supervisor.getEvents(active.supervisorTaskId,
+        record.monitor.lastSeq);
+      if (events.length) {
+        record.monitor = observeInvestigationEvents(record.monitor, events);
+        if (record.monitor.replanRequired) {
+          record.revisionAtTrigger = this.state.planRevision;
+        }
+        await this.#save();
+      }
+    }
+    if ((record.monitor.replanRequired || record.monitor.budgetExhausted)
+        && supervisorTask.status === "completed") {
+      // A Worker that has already finished must undergo normal independent
+      // verification, not be reported as an investigation-only failure.
+      record.monitor.replanRequired = false;
+      record.monitor.budgetExhausted = false;
+      record.monitor.readOnlyStreak = 0;
+      record.monitor.activeRead = false;
+      await this.#save();
+      return false;
+    }
+    if (!record.monitor.replanRequired && !record.monitor.budgetExhausted) return false;
+
+    // Intent is saved BEFORE pause. Repeated calls only issue an idempotent
+    // pause if the Supervisor is still in a pausable state.
+    if (!record.pauseRequested
+        && ["running", "waiting_approval", "queued",
+          "waiting_retry", "interrupted"].includes(supervisorTask.status)) {
+      await this.supervisor.pause(active.supervisorTaskId);
+      record.pauseRequested = true;
+      await this.#save();
+    }
+    return true;
   }
 
   async #advance({ resumePaused = false } = {}) {
@@ -1052,6 +1169,17 @@ export class TaskCoordinator {
         await this.#save();
         return this.getState();
       }
+      // Pending replan is a separate control-plane state, not a failed task.
+      // In particular, Supervisor.paused must never be classified as STOPPED
+      // until the plan has been revised and explicitly resumed.
+      if (active.status === "RUNNING"
+          && this.state.investigation?.supervisorTaskId === active.supervisorTaskId
+          && (this.state.investigation.monitor.replanRequired
+            || this.state.investigation.monitor.budgetExhausted)) {
+        if (await this.#observeInvestigation(active, supervisorTask)) {
+          return this.getState();
+        }
+      }
       // Only an explicit CLI resume may restart an existing paused task.
       // Identity and previously verified artifacts have already been checked.
       // Uncertain, failed, and cancelled work must not be restarted here.
@@ -1068,6 +1196,9 @@ export class TaskCoordinator {
         return this.getState();
       }
       if (active.status === "RUNNING") {
+        if (await this.#observeInvestigation(active, supervisorTask)) {
+          return this.getState(); // Pending replan is not task completion.
+        }
         if (supervisorTask.status !== "completed") return this.getState();
         active.status = "VERIFYING";
         await this.#save();
@@ -1123,7 +1254,9 @@ export class TaskCoordinator {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const state = await this.tick();
-      if (TERMINAL.has(state.status)) return state;
+      if (TERMINAL.has(state.status)
+          || state.investigation?.monitor.replanRequired
+          || state.investigation?.monitor.budgetExhausted) return state;
       await new Promise((resolve) => setTimeout(resolve, pollMs));
     }
     return this.getState(); // Timeout never implies completion or a retry.

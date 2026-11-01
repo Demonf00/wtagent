@@ -147,5 +147,26 @@ export function safeRuntimeEvent(event) {
     const value = allowed[key];
     if (typeof value === "string" && SAFE_CODES.test(value)) payload[key] = value;
   }
+  if (type === "tool.started" || type === "tool.result_sent") {
+    // Only a fixed category survives either Worker or Supervisor sanitization.
+    // Never persist raw tool names, arguments, commands, or browser content.
+    const readOnly = new Set([
+      "fs.list", "fs.read", "fs.search", "browser.inspect",
+    ]);
+    const name = allowed.name;
+    if (typeof name === "string" && readOnly.has(name)) {
+      payload.toolClass = "read";
+    } else if (typeof name === "string"
+        && /^[a-z][a-z0-9_.-]{0,95}$/.test(name)) {
+      payload.toolClass = name.startsWith("verification.") ? "verify" : "other";
+    } else if (["read", "verify", "other", "unknown"].includes(allowed.toolClass)) {
+      payload.toolClass = allowed.toolClass;
+    } else {
+      payload.toolClass = "unknown";
+    }
+    if (type === "tool.result_sent" && typeof allowed.ok === "boolean") {
+      payload.ok = allowed.ok;
+    }
+  }
   return { type, payload };
 }
