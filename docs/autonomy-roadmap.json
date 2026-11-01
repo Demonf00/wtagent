@@ -834,7 +834,7 @@
     {
       "id": "SU-03",
       "phase": "Controlled Self-Upgrade",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "SU-02"
       ],
@@ -850,9 +850,16 @@
         "No duplicated side effects or false success",
         "All phases traceable to independent commits and verified evidence"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "6fb8906900911867f89f39a0a085a35dc17682ea",
+      "testEvidence": {
+        "syntax": "npm run check: Syntax OK, 205 files",
+        "fullSuite": "npm test: 1013 total; 1000 passed, 0 failed, 13 skipped",
+        "focused": "SU-03 real four-stage Supervisor/Coordinator E2E passed; independent evidence and anti-tampering tests passed",
+        "integration": "Evidence runner: 36/36 passed, 0 skipped; real replan/repair/restart/final verifier, independent handoff rotation, idempotent crash recovery",
+        "provenance": "27 predecessor tasks each had a distinct verified Git commit on the active HEAD ancestry",
+        "diff": "git diff --check and git diff --cached --check passed"
+      },
+      "notes": "Real multi-stage Coordinator/Supervisor exercise injects a missing artifact, verifies BLOCKED rather than false success, performs prepared repair, revises the DAG, restarts Supervisor twice, and proves behavioral finalAcceptance with a valid delivery receipt and no duplicate side effects. Separate real integration verifies cross-conversation handoff. A reproducible trusted evidence runner checks all test phases and Git commit ancestry. Live browser-provider and production checks are not claimed."
     }
   ]
 }
