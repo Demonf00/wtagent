@@ -394,3 +394,162 @@ test("CLI explains how to resume a challenge-paused session without replay", asy
   assert.match(output.join("\n"), new RegExp("wtagent resume " + session.sessionId));
   assert.match(output.join("\n"), /Do not close the browser tab/);
 });
+
+
+test("CM-02 supervisor performs fresh handoff and never replays the old turn", async (t) => {
+  const {home,session,sessionsDir}=await fixture(t);
+  await session.update({
+    phase:"idle",turn:38,runCount:2,
+    lastMessage:"Previous Worker completed",
+    conversationUrl:"https://chatgpt.com/c/previous",
+    conversationTargetId:"original-browser-target",
+  });
+  const calls=[], closed=[];
+  function supervisorFactory() {
+    const instance={tasks:[],initialized:true,
+      async init(){},
+      list(){return this.tasks.map(x=>x.record);},
+      async enqueueSessionTurn(input){
+        calls.push(input);
+        const record={
+          taskId:"task_"+String(calls.length).padStart(36,"0"),
+          sessionId:input.sessionId,status:"queued",
+          createdAt:new Date(Date.now()+calls.length).toISOString(),
+          result:{message:"Worker finished"}
+        };
+        this.tasks.push({record,polls:0});
+        return structuredClone(record);
+      },
+      get(id){
+        const x=this.tasks.find(t=>t.record.taskId===id);
+        x.polls++;
+        if(x.polls>1)x.record.status="completed";
+        return structuredClone(x.record);
+      },
+      async getEvents(){return [];},
+      async close(){closed.push(true);}
+    };
+    return instance;
+  }
+  const out=[];
+  const prior=await executeSupervisorSession({
+    session,options:{home},chatInput:{close(){}}
+  },{
+    interactive:false,createSupervisor:supervisorFactory,
+    output:x=>out.push(x),pollMs:1
+  });
+  assert.equal(prior.kind,"automatic-context-rotation");
+  assert.equal(calls.length,1);
+  assert.equal(closed.length,1);
+  const next=await AgentSession.load({
+    sessionsDir,sessionId:prior.nextSessionId
+  });
+  assert.equal(next.state.previousContextSessionId,session.sessionId);
+  assert.equal(next.state.conversationTargetId,null);
+  const previous=await AgentSession.load({
+    sessionsDir,sessionId:session.sessionId
+  });
+  assert.equal(previous.state.conversationTargetId,"original-browser-target");
+  const repeated=await executeSupervisorSession({
+    session:previous,options:{home},chatInput:{close(){}}
+  },{
+    interactive:false,createSupervisor:supervisorFactory,
+    output:x=>out.push(x),pollMs:1
+  });
+  assert.equal(repeated.kind,"automatic-context-rotation");
+  assert.equal(repeated.nextSessionId,next.sessionId);
+  assert.equal(calls.length,1,"Resume must not replay old Worker");
+  const freshTurn=await executeSupervisorSession({
+    session:next,options:{home},chatInput:{close(){}}
+  },{
+    interactive:false,createSupervisor:supervisorFactory,
+    output:x=>out.push(x),pollMs:1
+  });
+  assert.equal(calls.length,2);
+  assert.equal(calls[1].sessionId,next.sessionId);
+  assert.equal(calls[1].instruction,null);
+  assert.notEqual(freshTurn?.kind,"automatic-context-rotation");
+  assert.equal(closed.length,3);
+});
+
+
+test("CM-02 pending rotation reattaches an unfinished Worker before rotating",async(t)=>{
+  const {session,sessionsDir,home}=await fixture(t);
+  await session.update({
+    phase:"idle",turn:38,runCount:2,
+    lastMessage:"Previous task settled, later continuation interrupted",
+    automaticContextRotation:{
+      schema:1,status:"PENDING",nextSessionId:null,
+    },
+  });
+  const existing={
+    taskId:"task_01234567-89ab-cdef-0123-456789abcdef",
+    sessionId:session.sessionId,status:"running",
+    createdAt:new Date().toISOString(),result:{message:"Recovered Worker complete"},
+  };
+  let polls=0, enqueueCount=0, closeCount=0;
+  const output=[];
+  const fakeSupervisor={
+    initialized:true,
+    async init(){},
+    list(){return [structuredClone(existing)];},
+    async enqueueSessionTurn(){enqueueCount++;throw Error("Would replay existing task");},
+    get(id){
+      assert.equal(id,existing.taskId);
+      if(++polls>=2)existing.status="completed";
+      return structuredClone(existing);
+    },
+    async getEvents(){return [];},
+    async close(){closeCount++;},
+  };
+  const result=await executeSupervisorSession({
+    session,options:{home},resume:true,chatInput:{close(){}},
+  },{
+    interactive:false,createSupervisor:()=>fakeSupervisor,
+    output:x=>output.push(String(x)),pollMs:1,
+  });
+  assert.equal(result.kind,"automatic-context-rotation");
+  assert.equal(enqueueCount,0);
+  assert.ok(polls>=2);
+  assert.equal(closeCount,1);
+  assert.match(output.join("\n"),/finishing the existing Supervisor task/);
+  const saved=await AgentSession.load({sessionsDir,sessionId:session.sessionId});
+  assert.equal(saved.state.automaticContextRotation.status,"ROTATED");
+  assert.equal(saved.state.automaticContextRotation.nextSessionId,result.nextSessionId);
+});
+
+
+test("CM-02 preflight handoff preserves a new user instruction without replay",async t=>{
+  const {session,home,sessionsDir}=await fixture(t);
+  await session.update({
+    phase:"idle",turn:38,lastMessage:"Last Worker completed",
+    conversationTargetId:"old-target",
+  });
+  const {advanceAutomaticContextRotation}=await import("../src/context/automatic-rotation.js");
+  const finished=await advanceAutomaticContextRotation({session,sessionsDir});
+  assert.equal(finished.status,"ROTATED");
+  let enqueued=0;
+  const result=await executeSupervisorSession({
+    session,options:{home},resume:true,
+    instruction:"New task after safe checkpoint",
+    files:[{name:"source.txt",path:path.join(home,"source.txt")}],
+    chatInput:{close(){}},
+  },{
+    interactive:false,
+    createSupervisor:()=>({
+      initialized:true,
+      async init(){},list(){return [];},
+      async enqueueSessionTurn(){enqueued++;throw Error("Old session must not be reused");},
+      async close(){},
+    }),
+    output:()=>{},
+  });
+  assert.equal(enqueued,0);
+  assert.equal(result.kind,"automatic-context-rotation");
+  assert.equal(result.nextSessionId,finished.next.sessionId);
+  assert.equal(result.pendingInstruction,"New task after safe checkpoint");
+  assert.deepEqual(result.pendingFiles,[{name:"source.txt",path:path.join(home,"source.txt")}]);
+  const old=await AgentSession.load({sessionsDir,sessionId:session.sessionId});
+  assert.equal(old.state.conversationTargetId,"old-target");
+  assert.equal(old.state.followUps.length,0);
+});

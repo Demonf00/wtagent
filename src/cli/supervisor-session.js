@@ -1,4 +1,4 @@
-import { inspectSessionContext } from "../context/context-manager.js";
+import { advanceAutomaticContextRotation } from "../context/automatic-rotation.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { AgentSession } from "../session/agent-session.js";
@@ -158,6 +158,58 @@ let nextInstruction = instruction;
 let nextFiles = files;
 let resuming = resume;
 for (;;) {
+const durableSession = await AgentSession.load({
+  sessionsDir, sessionId: session.sessionId,
+});
+const unfinishedForRecovery = supervisor.list()
+  .filter((item) => item.sessionId === session.sessionId)
+  .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+const recoveringPendingRotation = (
+  durableSession.state.automaticContextRotation?.status === "PENDING"
+  && !nextInstruction?.trim()
+  && !(nextFiles?.length)
+  && unfinishedForRecovery
+  && (IN_PROGRESS.has(unfinishedForRecovery.status)
+    || (resuming && ["paused", "interrupted"].includes(unfinishedForRecovery.status)))
+);
+if (recoveringPendingRotation) {
+  output("[Context] Rotation is pending; finishing the existing Supervisor task before rotating.");
+}
+if (durableSession.state.automaticContextRotation && !recoveringPendingRotation) {
+  // A previous process may have persisted PENDING/ROTATED before exiting.
+  // Revalidate its entire checkpoint and replacement identity before doing
+  // anything on the old Session, including submitting another Worker turn.
+  let rotation;
+  try {
+    rotation = await advanceAutomaticContextRotation({
+      session: durableSession, sessionsDir,
+    });
+  } catch (error) {
+    output(`[Context] Saved rotation cannot be safely recovered: ${error.code ?? "CONTEXT_ROTATION_STATE_UNSAFE"}`);
+    return { kind: "automatic-context-rotation-uncertain" };
+  }
+  if (rotation.status === "ROTATED") {
+    output("[Context] Existing safe rotation found; no old Worker will run.");
+    return {
+      kind: "automatic-context-rotation",
+      nextSessionId: rotation.next.sessionId,
+      previousSessionId: session.sessionId,
+      reused: true,
+      // Only a preflight handoff can carry input. The post-Worker
+      // handoff must never resend the just-completed instruction.
+      pendingInstruction: nextInstruction,
+      pendingFiles: nextFiles,
+    };
+  }
+  if (rotation.status === "DEFERRED") {
+    output(`[Context] Rotation remains deferred: ${(rotation.blockers ?? []).join(", ")}`);
+    return { kind: "automatic-context-rotation-deferred" };
+  }
+  if (rotation.status === "UNCERTAIN") {
+    output("[Context] Rotation creation outcome unknown; manual recovery required.");
+    return { kind: "automatic-context-rotation-uncertain" };
+  }
+}
 const existing = supervisor.list()
 .filter((item) => item.sessionId === session.sessionId)
 .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
@@ -259,19 +311,38 @@ break;
 }
 if (task.result?.message) output(task.result.message);
 output(`[Supervisor] Completed turn for session ${session.sessionId}`);
+// The completed Worker has settled before requesting a fresh conversation.
+// Never issue another tool or instruction between this decision and unlock.
 try {
-  const contextSession = await AgentSession.load({ sessionsDir, sessionId: session.sessionId });
-  const pressure = await inspectSessionContext(contextSession);
-  if (pressure.warning) {
-    output(`[Context] Long conversation: ${pressure.turns} turns; transcript ${pressure.transcriptBytes} bytes (approximate, not provider token usage).`);
-    if (pressure.rotationAllowed) {
-      output(`[Context] Safe checkpoint. To start a fresh conversation: wtagent context rotate ${session.sessionId}`);
-    } else {
-      output(`[Context] Rotation blocked: ${pressure.blockers.join(", ")}`);
-    }
+  const contextSession = await AgentSession.load({
+    sessionsDir, sessionId: session.sessionId,
+  });
+  const rotation = await advanceAutomaticContextRotation({
+    session: contextSession, sessionsDir,
+  });
+  if (rotation.pressure?.warning) {
+    output(`[Context] Long conversation: ${rotation.pressure.turns} turns; transcript ${rotation.pressure.transcriptBytes} bytes (approximate, not provider token usage).`);
   }
-} catch {
-  // Monitoring must never turn an already completed task into a failure.
+  if (rotation.status === "ROTATED") {
+    output(`[Context] Fresh Session ${rotation.next.sessionId} recorded at a clean checkpoint.`);
+    return {
+      kind: "automatic-context-rotation",
+      nextSessionId: rotation.next.sessionId,
+      previousSessionId: session.sessionId,
+      reused: rotation.reused,
+    };
+  }
+  if (rotation.status === "DEFERRED") {
+    output(`[Context] Rotation deferred, preserving unfinished operations: ${(rotation.blockers ?? []).join(", ")}`);
+    return { kind: "automatic-context-rotation-deferred" };
+  }
+  if (rotation.status === "UNCERTAIN") {
+    output("[Context] Rotation outcome unknown; manual recovery required, no repeat.");
+    return { kind: "automatic-context-rotation-uncertain" };
+  }
+} catch (error) {
+  output(`[Context] Rotation monitoring safely stopped: ${error.code ?? "CONTEXT_ROTATION_ERROR"}`);
+  return { kind: "automatic-context-rotation-uncertain" };
 }
 if (!interactive) return task.result;
 const freshSession = await AgentSession.load({ sessionsDir, sessionId: session.sessionId });

@@ -11,6 +11,7 @@ import {
   MAX_CANONICAL_MANIFEST_BYTES,
 } from "../src/context/canonical-manifest.js";
 import { AgentSession } from "../src/session/agent-session.js";
+import { advanceAutomaticContextRotation } from "../src/context/automatic-rotation.js";
 import {
   contextSafety, contextPressure, buildContextHandoff,
   inspectSessionContext, prepareContextRotation,
@@ -375,4 +376,125 @@ test("CM-01 Git source follows actual HEAD changes without changing verified tas
   assert.equal(second.tasks[0].receiptSha256,first.tasks[0].receiptSha256);
   assert.equal(second.nextAction.action,"START_TASK");
   assert.equal(second.nextAction.taskId,"two");
+});
+
+
+test("CM-02 automatic rotation creates a new identity only at a clean checkpoint",async t=>{
+  const {session,sessionsDir}=await fixture(t);
+  const before=structuredClone(session.state);
+  const result=await advanceAutomaticContextRotation({session,sessionsDir});
+  assert.equal(result.status,"ROTATED");
+  assert.equal(result.reused,false);
+  assert.notEqual(result.next.sessionId,session.sessionId);
+  assert.equal(result.next.state.previousContextSessionId,session.sessionId);
+  assert.equal(result.next.state.conversationUrl,null);
+  assert.equal(result.next.state.conversationTargetId,null);
+  assert.equal(result.next.state.pendingOutbound,null);
+  assert.equal(result.next.state.pendingToolResult,null);
+  assert.deepEqual(result.next.state.sideEffectTools,{});
+  const original=await AgentSession.load({sessionsDir,sessionId:session.sessionId});
+  assert.equal(original.state.conversationUrl,before.conversationUrl);
+  assert.equal(original.state.conversationTargetId,before.conversationTargetId);
+  assert.deepEqual(original.state.followUps,before.followUps);
+  assert.equal(original.state.automaticContextRotation.status,"ROTATED");
+  assert.equal(original.state.automaticContextRotation.nextSessionId,result.next.sessionId);
+  const again=await advanceAutomaticContextRotation({session:original,sessionsDir});
+  assert.equal(again.status,"ROTATED");
+  assert.equal(again.reused,true);
+  assert.equal(again.next.sessionId,result.next.sessionId);
+  assert.equal((await fs.readdir(sessionsDir)).length,2);
+});
+
+test("CM-02 preserves pending outbound and tool results, then rotates after recovery",async t=>{
+  const {session,sessionsDir}=await fixture(t);
+  const pendingOutbound={outboundId:"inflight-original"};
+  const pendingToolResult={toolCallId:"tool-original",body:"untrusted-private-result"};
+  await session.update({pendingOutbound,pendingToolResult});
+  const blocked=await advanceAutomaticContextRotation({session,sessionsDir});
+  assert.equal(blocked.status,"DEFERRED");
+  assert.ok(blocked.blockers.includes("PENDING_OUTBOUND"));
+  assert.ok(blocked.blockers.includes("PENDING_TOOL_RESULT"));
+  assert.equal((await fs.readdir(sessionsDir)).length,1);
+  const restored=await AgentSession.load({sessionsDir,sessionId:session.sessionId});
+  assert.equal(restored.state.automaticContextRotation.status,"PENDING");
+  assert.deepEqual(restored.state.pendingOutbound,pendingOutbound);
+  assert.deepEqual(restored.state.pendingToolResult,pendingToolResult);
+  await restored.update({pendingOutbound:null,pendingToolResult:null});
+  const next=await advanceAutomaticContextRotation({
+    session:await AgentSession.load({sessionsDir,sessionId:session.sessionId}),sessionsDir,
+  });
+  assert.equal(next.status,"ROTATED");
+  assert.equal(next.next.state.pendingOutbound,null);
+  assert.equal(next.next.state.pendingToolResult,null);
+  assert.doesNotMatch(next.next.state.task,/untrusted-private-result/);
+});
+
+test("CM-02 refuses to rotate while side effects are uncertain",async t=>{
+  const {session,sessionsDir}=await fixture(t);
+  const record={status:"unknown",operationId:"do-not-replay"};
+  await session.update({sideEffectTools:{"terminal.exec":record}});
+  const blocked=await advanceAutomaticContextRotation({session,sessionsDir});
+  assert.equal(blocked.status,"DEFERRED");
+  assert.ok(blocked.blockers.includes("UNCERTAIN_SIDE_EFFECT"));
+  assert.equal((await fs.readdir(sessionsDir)).length,1);
+  const saved=await AgentSession.load({sessionsDir,sessionId:session.sessionId});
+  assert.deepEqual(saved.state.sideEffectTools["terminal.exec"],record);
+  assert.equal(saved.state.automaticContextRotation.status,"PENDING");
+});
+
+test("CM-02 blocks active Supervisor tasks instead of silently rotating",async t=>{
+  const {session,sessionsDir}=await fixture(t);
+  const supervisorDir=path.join(session.directory,"supervisor");
+  await fs.mkdir(supervisorDir);
+  const filename="task_01234567-89ab-cdef-0123-456789abcdef.json";
+  await fs.writeFile(path.join(supervisorDir,filename),
+    JSON.stringify({status:"running"}));
+  const blocked=await advanceAutomaticContextRotation({session,sessionsDir});
+  assert.equal(blocked.status,"DEFERRED");
+  assert.ok(blocked.blockers.includes("ACTIVE_SUPERVISOR_TASK"));
+  assert.equal((await fs.readdir(sessionsDir)).length,1);
+  const checkpoint=await AgentSession.load({sessionsDir,sessionId:session.sessionId});
+  assert.equal(checkpoint.state.automaticContextRotation.status,"PENDING");
+  await fs.writeFile(path.join(supervisorDir,filename),
+    JSON.stringify({status:"completed"}));
+  const resumed=await advanceAutomaticContextRotation({session:checkpoint,sessionsDir});
+  assert.equal(resumed.status,"ROTATED");
+  assert.equal((await fs.readdir(sessionsDir)).length,2);
+});
+
+test("CM-02 creation outcome unknown fails closed without duplicate Session",async t=>{
+  const {session,sessionsDir}=await fixture(t);
+  await session.update({automaticContextRotation:{
+    schema:1,status:"CREATING",nextSessionId:null,
+  }});
+  const uncertain=await advanceAutomaticContextRotation({session,sessionsDir});
+  assert.equal(uncertain.status,"UNCERTAIN");
+  const after=await AgentSession.load({sessionsDir,sessionId:session.sessionId});
+  assert.equal(after.state.automaticContextRotation.status,"CREATING");
+  assert.equal((await fs.readdir(sessionsDir)).length,1);
+  const repeated=await advanceAutomaticContextRotation({session:after,sessionsDir});
+  assert.equal(repeated.status,"UNCERTAIN");
+  assert.equal((await fs.readdir(sessionsDir)).length,1);
+});
+
+test("CM-02 invalid or forged durable rotation records cannot open unrelated Session",async t=>{
+  const {session,sessionsDir}=await fixture(t);
+  await session.update({automaticContextRotation:{
+    schema:1,status:"ROTATED",nextSessionId:"../../another-session",
+  }});
+  await assert.rejects(advanceAutomaticContextRotation({session,sessionsDir}),
+    {code:"CONTEXT_ROTATION_STATE_UNSAFE"});
+  const saved=await AgentSession.load({sessionsDir,sessionId:session.sessionId});
+  assert.equal(saved.state.conversationTargetId,session.state.conversationTargetId);
+  assert.equal((await fs.readdir(sessionsDir)).length,1);
+});
+
+test("CM-02 below-pressure session neither records request nor creates replacement",async t=>{
+  const {session,sessionsDir}=await fixture(t);
+  await session.update({turn:1});
+  const decision=await advanceAutomaticContextRotation({session,sessionsDir});
+  assert.equal(decision.status,"NOT_NEEDED");
+  assert.equal((await fs.readdir(sessionsDir)).length,1);
+  const saved=await AgentSession.load({sessionsDir,sessionId:session.sessionId});
+  assert.equal(saved.state.automaticContextRotation,undefined);
 });

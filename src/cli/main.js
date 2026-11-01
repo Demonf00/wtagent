@@ -535,11 +535,36 @@ async function runUpdate() {
 
 async function executeSelectedSession(args) {
  if (args.options.legacy) return await executeSession(args);
- return await executeSupervisorSession(args, {
- interactive: isInteractiveSession(args.options),
- readNextMessage: promptForNextMessage,
- printResumeHint,
- });
+ let current = args;
+ for (let rotations = 0; rotations < 8; rotations++) {
+   const result = await executeSupervisorSession(current, {
+     interactive: isInteractiveSession(args.options),
+     readNextMessage: promptForNextMessage,
+     printResumeHint,
+   });
+   if (result?.kind !== "automatic-context-rotation") return result;
+   // executeSupervisorSession releases the old lock before returning.
+   const sessionsDir = path.dirname(current.session.directory);
+   const next = await AgentSession.load({
+     sessionsDir, sessionId: result.nextSessionId,
+   });
+   if (next.state.previousContextSessionId !== current.session.sessionId) {
+     throw Object.assign(
+       new Error("Automatic replacement session identity mismatch."),
+       { code: "CONTEXT_ROTATION_STATE_UNSAFE" },
+     );
+   }
+   console.log("[Context] Continuing in a new conversation via Session " + next.sessionId);
+   const pendingInstruction = result.pendingInstruction ?? null;
+   const pendingFiles = result.pendingFiles ?? [];
+   current = { session: next, options: args.options,
+     resume: Boolean(pendingInstruction?.trim() || pendingFiles.length),
+     instruction: pendingInstruction, files: pendingFiles };
+ }
+ throw Object.assign(
+   new Error("Context rotation hop limit reached; Session state preserved."),
+   { code: "CONTEXT_ROTATION_HOP_LIMIT" },
+ );
 }
 
 async function runAgent(taskParts, options) {
