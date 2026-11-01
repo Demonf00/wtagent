@@ -555,7 +555,7 @@
     {
       "id": "CM-02",
       "phase": "Context Management",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "CM-01"
       ],
@@ -571,14 +571,19 @@
         "No mutation of existing browser identity",
         "Blocked rotation safely pauses rather than losing work"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "5ddd6e5360c6b3df31af03bf6d2122175e0987ac",
+      "testEvidence": {
+        "syntax": "npm run check: Syntax OK, 184 files",
+        "full": "npm test: 953 total, 940 passed, 0 failed, 13 skipped",
+        "focused": "34 focused tests passed, including rotation, recovery, identity preservation, and handoff",
+        "diff": "git diff --check and git diff --cached --check passed"
+      },
+      "notes": "Durable PENDING/CREATING/ROTATED checkpoint; fail closed on uncertain creation; rotation only at a safe checkpoint. Preserves the old browser identity and prevents replay of unfinished side effects. No push, merge, publish, or runtime restart."
     },
     {
       "id": "CM-03",
       "phase": "Context Management",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "CM-02"
       ],
