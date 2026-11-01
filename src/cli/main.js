@@ -34,6 +34,7 @@ import { runAutonomyCommand } from "./autonomy-command.js";
 import { runDurableOrchestrator, readDurableOrchestratorState } from "../autonomy/durable-orchestrator.js";
 import { createHeartbeatNotifier } from "../supervisor/heartbeat-notifier.js";
 import { readAutonomyProgress } from "./progress-command.js";
+import { readEvidenceDeliveryReport } from "../autonomy/delivery-report.js";
 import {
   inspectOrchestratorOwner, recoverStaleOrchestratorOwner,
 } from "../autonomy/orchestrator-ownership.js";
@@ -1022,6 +1023,20 @@ autonomyCommand
       workspaceRoot:opts.project??process.cwd(),
     });
     console.log(JSON.stringify(result,null,2));
+  });
+
+autonomyCommand
+  .command("delivery-report")
+  .description("Report task and goal acceptance with historical receipt evidence")
+  .requiredOption("--state <path>", "Existing Coordinator checkpoint JSON path")
+  .action(async (_, command) => {
+    const opts=command.optsWithGlobals();
+    const report=await readEvidenceDeliveryReport({
+      stateFile:opts.state,
+      workspaceRoot:opts.project??process.cwd(),
+    });
+    console.log(JSON.stringify(report,null,2));
+    if(report.deliveryStatus!=="DELIVERED")process.exitCode=1;
   });
 
 autonomyCommand

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { TaskSupervisor } from "../src/supervisor/task-supervisor.js";
 import { TaskCoordinator, validateTaskPlan } from "../src/autonomy/task-coordinator.js";
+import { readEvidenceDeliveryReport } from "../src/autonomy/delivery-report.js";
 
 async function setup(t, { artifact = "ready" } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "wtagent-fv06-"));
@@ -120,12 +121,28 @@ test("FV-06 real final test produces DELIVERED receipt and resumes read-only", a
   assert.equal(state.goalDelivery.evidence[0].testSummary.passed, 1);
   assert.equal(coordinator.getDeliveryReport().status, "DELIVERED");
   assert.equal(coordinator.getDeliveryReport().unverifiedCapabilities.length, 0);
+  const report=await readEvidenceDeliveryReport({
+    stateFile:ctx.stateFile,workspaceRoot:ctx.workspaceRoot,
+  });
+  assert.equal(report.deliveryStatus,"DELIVERED",JSON.stringify(report.unmetRequirements));
+  assert.equal(report.coordinatorStatus,"VERIFIED");
+  assert.equal(report.unmetRequirements.length,0);
+  assert.equal(report.tasks.length,1);
+  assert.ok(report.tasks[0].receiptValid);
+  assert.ok(report.tasks[0].checks.every(check=>check.satisfied));
+  assert.ok(report.finalAcceptance.every(check=>check.satisfied));
+  assert.match(report.reportDigest,/^[a-f0-9]{64}$/);
+  assert.deepEqual(ctx.executions,["build"]);
   const original = structuredClone(state.goalDelivery);
   await ctx.restart();
   const resumed = await ctx.load();
   const again = await resumed.run({ timeoutMs: 5000, pollMs: 5 });
   assert.equal(again.status, "VERIFIED");
   assert.deepEqual(again.goalDelivery, original);
+  const reattachedReport=await readEvidenceDeliveryReport({
+    stateFile:ctx.stateFile,workspaceRoot:ctx.workspaceRoot,
+  });
+  assert.deepEqual(reattachedReport,report);
   assert.deepEqual(ctx.executions, ["build"]);
 });
 
