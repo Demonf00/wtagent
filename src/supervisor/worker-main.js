@@ -3,6 +3,7 @@ import { executeConversationTurn } from "../runtime/conversation-runner.js";
 import { TaskControl } from "./task-control.js";
 import { approvalIdentity } from "./approval-provider.js";
 import { safeRuntimeEvent } from "./recovery-controller.js";
+import { safeLiveEvent } from "./live-display.js";
 
 // A task worker is disposable. The Supervisor owns scheduling, persistence,
 // decisions and recovery. Only the existing runtime may reconcile an outbound.
@@ -111,6 +112,8 @@ async function run(message) {
       renderer: quietRenderer(),
       onEvent: async (event) => {
         progress(event?.type);
+        const display = safeLiveEvent(event);
+        if (display) send({ type: "live", event: display });
         if (event?.type !== "model.streaming") {
           send({ type: "event", event: safeRuntimeEvent(event) });
         }
