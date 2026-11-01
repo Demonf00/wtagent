@@ -30,12 +30,12 @@ test("SU-03 parser requires actual passing test title and valid TAP totals",()=>
     "ℹ tests 8\nℹ pass 8\nℹ fail 0\nℹ skipped 0",expected),
     /TEST_PHASE_UNVERIFIED/);
 });
-test("SU-03 verifies 27 independently committed roadmap phases against Git ancestry",async()=>{
+test("SU-03 verifies all independently committed roadmap phases against Git ancestry",async()=>{
   const plan=JSON.parse(await fs.readFile(root+"docs/autonomy-roadmap.json","utf8"));
   const commits=validateRoadmapEvidence(plan);
   assert.equal(commits.length,plan.tasks.filter(x=>x.status==="VERIFIED").length);
   assert.ok(commits.length>=27);
-  assert.equal(new Set(commits.map(x=>x.sha)).size,27);
+  assert.equal(new Set(commits.map(x=>x.sha)).size,commits.length);
   for(const id of idList)assert.ok(commits.some(x=>x.id===id));
 });
 test("SU-03 refuses copied SHA, missing evidence and fabricated Git ancestry",async()=>{
