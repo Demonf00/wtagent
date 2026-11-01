@@ -308,7 +308,7 @@
     {
       "id": "RR-03",
       "phase": "Runtime Reliability",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "RR-02"
       ],
@@ -323,14 +323,20 @@
         "No duplicated side effects on replay",
         "Separately labels mocked test evidence versus live browser smoke"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "d281af1dd6dd78e46b16751ee2eeffd758b6026a",
+      "testEvidence": {
+        "soak60": "node scripts/worker-soak.js --cycles=60: 60 tool executions, 60 unique side effects, 0 duplicated, 3 reused results; child exits 73, 74, 0",
+        "focused": "node --test test/worker-soak.test.js: 2 passed",
+        "full": "node --test: 885 tests, 872 passed, 13 skipped, 0 failed",
+        "syntax": "node scripts/check-syntax.js: 170 files",
+        "browser": "NOT_RUN: simulated provider only"
+      },
+      "notes": "Reproducible 50-200 cycle isolated real-runtime tool soak, real Node child termination, transport fault recovery, persisted replay guard, and sanitized structured mocked-vs-live evidence."
     },
     {
       "id": "FR-01",
       "phase": "Failure Resolution",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "RR-03"
       ],
