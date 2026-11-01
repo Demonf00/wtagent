@@ -31,6 +31,7 @@ import { ConversationRunner, resolveRuntimePaths } from "../runtime/conversation
 import { executeSupervisorSession } from "./supervisor-session.js";
 import { inspectSessionContext, prepareContextRotation } from "../context/context-manager.js";
 import { runAutonomyCommand } from "./autonomy-command.js";
+import { runDurableOrchestrator, readDurableOrchestratorState } from "../autonomy/durable-orchestrator.js";
 import { AgentSession } from "../session/agent-session.js";
 import { PolicyEngine } from "../policy/policy-engine.js";
 import { ApprovalStore } from "../policy/approval-store.js";
@@ -964,6 +965,52 @@ autonomyCommand
       conversationSessionId: opts.conversationSession ?? null,
     });
     if (result.status !== "VERIFIED") process.exitCode = 1;
+  });
+
+autonomyCommand
+  .command("orchestrate")
+  .description("Run bounded goal planning, execution and verification with a durable scheduler")
+  .requiredOption("--state <path>", "Checkpoint JSON path outside the workspace")
+  .option("--goal <goal>", "New goal to plan and execute")
+  .option("--plan <path>", "Reviewed local JSON plan to execute")
+  .option("--max-cycles <count>", "Maximum scheduler slices this invocation", "8")
+  .option("--slice-ms <milliseconds>", "Per-slice execution limit", "15000")
+  .option("--cooldown-ms <milliseconds>", "Minimum interval between slices", "1000")
+  .option("--max-run-ms <milliseconds>", "Maximum total scheduler invocation time", "120000")
+  .action(async (_, command) => {
+    assertNativeRuntimeSupported();
+    const opts = command.optsWithGlobals();
+    const result = await runDurableOrchestrator({
+      stateFile: opts.state,
+      workspaceRoot: opts.project ?? process.cwd(),
+      goal: opts.goal ?? null, planFile: opts.plan ?? null,
+      maxCycles: Number(opts.maxCycles),
+      sliceMs: Number(opts.sliceMs),
+      cooldownMs: Number(opts.cooldownMs),
+      maxRunMs: Number(opts.maxRunMs),
+      onState: state => console.log(
+        `[Orchestrator] ${state.status} stage=${state.lastStage} cycles=${state.cycles}`),
+      runSlice: slice => runAutonomyCommand({
+        action: slice.action, goal: slice.goal,
+        planFile: slice.planFile, stateFile: slice.stateFile,
+        options: opts, timeoutMs: slice.timeoutMs,
+      }),
+    });
+    console.log(`[Orchestrator] ${result.status}; checkpoint=${opts.state}.orchestrator.json`);
+    if (result.status !== "COMPLETE") process.exitCode = 1;
+  });
+
+autonomyCommand
+  .command("orchestrator-status")
+  .description("Inspect persisted orchestrator state without running any work")
+  .requiredOption("--state <path>", "Existing orchestration checkpoint path")
+  .action(async (_, command) => {
+    const opts = command.optsWithGlobals();
+    const state = await readDurableOrchestratorState({
+      stateFile: opts.state,
+      workspaceRoot: opts.project ?? process.cwd(),
+    });
+    console.log(JSON.stringify(state, null, 2));
   });
 
 autonomyCommand
