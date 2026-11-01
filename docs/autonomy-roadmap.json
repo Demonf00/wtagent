@@ -723,7 +723,7 @@
     {
       "id": "OB-02",
       "phase": "Observability and Delivery",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "OB-01"
       ],
@@ -738,14 +738,19 @@
         "Exhaustion cannot be mistaken for success",
         "No resource leak after cancellation"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "963b1916a3a2bf135a0f72f2c3b4ad4bd2f0dbb1",
+      "testEvidence": {
+        "syntax": "npm run check: Syntax OK, 196 files",
+        "fullSuite": "npm test: 996 total; 983 passed, 0 failed, 13 skipped",
+        "focused": "18/18 AS-01 and OB-02 tests passed; persistence across restarts, immutable limits, safe exhaustion, cancellation, uncertain outcomes, owner release, crash recovery and conservative reservation accounting",
+        "diff": "git diff --check and git diff --cached --check passed"
+      },
+      "notes": "Implemented persisted goal-wide elapsed time, scheduler-call and execution-attempt budgets, conservative pre-execution reservations, cancellation and uncertain-outcome handling, and concurrency=1 through existing workspace owner locking. Scheduler calls are not exact underlying model API calls or token counts."
     },
     {
       "id": "OB-03",
       "phase": "Observability and Delivery",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "OB-02"
       ],
