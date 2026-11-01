@@ -611,7 +611,7 @@
     {
       "id": "AS-01",
       "phase": "Autonomy Service",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "CM-03"
       ],
@@ -627,14 +627,19 @@
         "No busy-loop on paused/blocked states",
         "Exit and reschedule preserve checkpoints"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "04f39ec02749875876340aabbd7b4d07f74760e8",
+      "testEvidence": {
+        "syntax": "npm run check: Syntax OK, 187 files",
+        "fullSuite": "npm test: 969 tests, 956 passed, 0 failed, 13 skipped",
+        "focused": "AS-01: 9/9 passed, including real TaskSupervisor/TaskCoordinator integration, bounded resume, single workspace owner, blocked and paused no-poll, uncertain execution fail-closed, and workspace checkpoint containment",
+        "diff": "git diff --check and git diff --cached --check passed"
+      },
+      "notes": "Bounded durable scheduler with workspace-wide lock, atomic checkpoint, stage-aware resume, cooldown and CLI orchestrate/orchestrator-status commands. Automatically re-enters work only during an explicit invocation; independent background wake-up not implemented. No push, merge, release or restart."
     },
     {
       "id": "AS-02",
       "phase": "Autonomy Service",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "AS-01"
       ],
