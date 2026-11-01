@@ -31,16 +31,17 @@ async function fixture(t) {
 
 test("watcher requires explicit one-PR or one-label scope", () => {
   assert.deepEqual(parseWatchArgs(["--pr", "13", "--post-comment", "--once"]), {
-    pr: 13, label: null, postComment: true, once: true, intervalSeconds: 60,
+    pr: 13, label: null, postComment: true, once: true, intervalSeconds: 60, syncAfterMerge: false,
   });
   assert.deepEqual(parseWatchArgs(["--label", "wtagent-verify", "--interval-seconds", "15"]), {
-    pr: null, label: "wtagent-verify", postComment: false, once: false, intervalSeconds: 15,
+    pr: null, label: "wtagent-verify", postComment: false, once: false, intervalSeconds: 15, syncAfterMerge: false,
   });
   for (const input of [
     [], ["--pr", "0"], ["--pr", "1;whoami"], ["--label", "../../etc"],
     ["--pr", "13", "--label", "test"], ["--pr", "13", "--pr", "14"],
     ["--pr", "13", "--interval-seconds", "0"], ["--pr", "13", "--interval-seconds", "3601"],
     ["--pr", "13", "--post-comment", "--post-comment"],
+    ["--pr", "13", "--sync-after-merge", "--sync-after-merge"],
   ]) assert.throws(() => parseWatchArgs(input), input.join(" "));
 });
 
@@ -57,22 +58,22 @@ test("only same-repo owner PRs based on development branch are trusted", () => {
   ]) assert.equal(isTrustedCandidate(value), false);
 });
 
-test("GitHub API lookup filters labels and does not execute or read unauthorized PRs", () => {
+test("GitHub API lookup filters labels and rejects untrusted PRs without gh CLI", async () => {
   const calls = [];
-  const run = (program, args) => {
-    calls.push({ program, args });
-    return { code: 0, stdout: JSON.stringify([
+  const request = async (route) => {
+    calls.push(route);
+    return [
       candidate({ number: 14 }),
       candidate({ number: 13 }),
       candidate({ number: 12, labels: ["other"] }),
       candidate({ number: 11, user: { login: "attacker" } }),
-    ]) };
+    ];
   };
-  assert.deepEqual(lookupCandidates({ label: "wtagent-verify", run }),
+  assert.deepEqual(await lookupCandidates({ label: "wtagent-verify", request }),
     [{ pr: 13, sha: SHA1 }, { pr: 14, sha: SHA1 }]);
-  assert.deepEqual(calls, [{ program: "gh", args: [
-    "api", "repos/" + REPOSITORY + "/pulls?state=open&per_page=100",
-  ] }]);
+  assert.deepEqual(calls, [
+    "repos/" + REPOSITORY + "/pulls?state=open&per_page=100",
+  ]);
 });
 
 test("same SHA is checked exactly once across repeated polls and process restarts", async (t) => {
@@ -149,4 +150,23 @@ test("CLI watcher bounded once mode performs one cycle", async () => {
     pr: 13, once: true, intervalSeconds: 15,
   }, { check: async () => { cycles++; }, log() {} }), true);
   assert.equal(cycles, 1);
+});
+
+test("CLI watcher opt-in sync is disabled by default and runs only when enabled", async () => {
+  assert.equal(parseWatchArgs(["--pr", "13", "--sync-after-merge"]).syncAfterMerge, true);
+  let checked = 0;
+  let synced = 0;
+  const run = (syncAfterMerge) => watchPullRequests({
+    pr: 13, once: true, intervalSeconds: 15, syncAfterMerge,
+  }, {
+    check: async () => { checked++; },
+    syncMerged: async () => { synced++; },
+    log() {},
+  });
+  await run(false);
+  assert.equal(checked, 1);
+  assert.equal(synced, 0);
+  await run(true);
+  assert.equal(checked, 2);
+  assert.equal(synced, 1);
 });

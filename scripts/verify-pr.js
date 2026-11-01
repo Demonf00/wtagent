@@ -9,6 +9,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolveLaunchPlan } from "../src/platform/command-launcher.js";
+import { githubApi } from "./github-api.js";
 
 export const REPOSITORY = "Demonf00/wtagent";
 export const SOURCE_ROOT = fileURLToPath(new URL("../", import.meta.url));
@@ -140,6 +141,7 @@ function commentBody(report) {
 export async function verifyPullRequest({
   pr, postComment = false, expectedSha = null, root = SOURCE_ROOT, reportRoot = null,
   run = runProgram, checks = CHECKS, log = console.log,
+  request = githubApi,
 } = {}) {
   requiredNumber(pr);
   if (expectedSha !== null && !/^[0-9a-f]{40}$/i.test(expectedSha)) {
@@ -224,16 +226,15 @@ export async function verifyPullRequest({
     if (postComment && !report.error?.startsWith("PR head changed")) {
       const body = commentBody(report);
       try {
-        const result = run("gh", [
-          "api", "repos/" + REPOSITORY + "/issues/" + pr + "/comments",
-          "-f", "body=" + body,
-        ], rootPath);
-        report.commentPosted = result.code === 0;
+        await request("repos/" + REPOSITORY + "/issues/" + pr + "/comments", {
+          method: "POST", body: { body },
+        });
+        report.commentPosted = true;
       } catch {
         report.commentPosted = false;
       }
       if (!report.commentPosted) {
-        report.commentError = "GitHub CLI comment post failed; check gh auth status";
+        report.commentError = "GitHub API comment post failed; check GH_TOKEN or GITHUB_TOKEN permissions and connectivity";
       }
     }
     await fs.writeFile(report.reportPath, JSON.stringify(report, null, 2) + "\n");

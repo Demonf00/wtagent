@@ -12,6 +12,8 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { REPOSITORY, SOURCE_ROOT, runProgram, verifyPullRequest } from "./verify-pr.js";
+import { fastForwardVerifiedMerge, isMergedVerifiedPR, lookupMergedPR } from "./sync-merged-prs.js";
+import { githubApi } from "./github-api.js";
 export { REPOSITORY } from "./verify-pr.js";
 
 export const TRUSTED_AUTHOR = "Demonf00";
@@ -25,6 +27,7 @@ export function parseWatchArgs(argv) {
   let label = null;
   let intervalSeconds = DEFAULT_INTERVAL_SECONDS;
   let postComment = false;
+  let syncAfterMerge = false;
   let once = false;
   const seen = new Set();
   for (let i = 0; i < argv.length; i++) {
@@ -51,6 +54,8 @@ export function parseWatchArgs(argv) {
       once = true;
     } else if (flag === "--post-comment") {
       postComment = true;
+    } else if (flag === "--sync-after-merge") {
+      syncAfterMerge = true;
     } else {
       throw new Error("Unknown PR watch argument: " + flag);
     }
@@ -58,7 +63,7 @@ export function parseWatchArgs(argv) {
   if (Boolean(pr) === Boolean(label)) {
     throw new Error("Specify exactly one scope: --pr NUMBER or --label NAME.");
   }
-  return { pr, label, intervalSeconds, postComment, once };
+  return { pr, label, intervalSeconds, postComment, once, syncAfterMerge };
 }
 
 export function isTrustedCandidate(item) {
@@ -74,14 +79,11 @@ export function isTrustedCandidate(item) {
     && SHA.test(item.head?.sha ?? "");
 }
 
-export function lookupCandidates({ pr = null, label = null, run = runProgram, root = SOURCE_ROOT } = {}) {
+export async function lookupCandidates({ pr = null, label = null, request = githubApi } = {}) {
   const route = pr == null
     ? "repos/" + REPOSITORY + "/pulls?state=open&per_page=100"
     : "repos/" + REPOSITORY + "/pulls/" + pr;
-  const result = run("gh", ["api", route], root);
-  if (result.code !== 0) throw new Error("GitHub PR lookup failed; check gh auth status and connectivity.");
-  let parsed;
-  try { parsed = JSON.parse(result.stdout); } catch { throw new Error("Invalid GitHub PR API JSON."); }
+  const parsed = await request(route);
   const candidates = pr == null ? parsed : [parsed];
   if (!Array.isArray(candidates)) throw new Error("GitHub PR API returned the wrong shape.");
   return candidates.filter((item) =>
@@ -133,7 +135,7 @@ export async function checkForPullRequests({
   log = console.log,
 } = {}) {
   const state = await loadWatchState(stateFile);
-  const candidates = lookup({ pr, label });
+  const candidates = await lookup({ pr, label });
   const results = [];
   for (const candidate of candidates) {
     const key = String(candidate.pr);
@@ -177,6 +179,50 @@ export async function checkForPullRequests({
   return results;
 }
 
+/**
+ * Sync only after a previously locally verified SHA is confirmed merged on
+ * GitHub. Never sync a PR merely because its unit tests passed.
+ */
+export async function syncMergedVerifiedPullRequests({
+  stateFile = defaultStatePath(),
+  lookup = lookupMergedPR,
+  fastForward = fastForwardVerifiedMerge,
+  log = console.log,
+} = {}) {
+  const state = await loadWatchState(stateFile);
+  const results = [];
+  for (const [key, record] of Object.entries(state.verified)) {
+    if (!["passed", "pass-feedback-failed"].includes(record?.status)
+      || !SHA.test(record.sha ?? "") || record.syncedSha === record.sha) continue;
+    const pr = Number(key);
+    if (!Number.isSafeInteger(pr) || pr < 1) continue;
+    let metadata;
+    try {
+      metadata = await lookup(pr);
+    } catch (error) {
+      results.push({ pr, status: "lookup-error" });
+      log("[watch-pr] merged PR lookup failed for #" + pr);
+      continue;
+    }
+    if (!isMergedVerifiedPR(metadata, { pr, sha: record.sha })) continue;
+    let sync;
+    try {
+      sync = await fastForward({ mergeSha: metadata.merge_commit_sha });
+    } catch (error) {
+      sync = { status: "blocked", reason: "SYNC_INFRASTRUCTURE_ERROR" };
+    }
+    log("[watch-pr] sync PR #" + pr + ": " + sync.status
+      + (sync.reason ? " (" + sync.reason + ")" : ""));
+    results.push({ pr, ...sync });
+    if (sync.status === "synced" || sync.status === "already-current") {
+      record.syncedSha = record.sha;
+      record.syncedAt = new Date().toISOString();
+      await saveWatchState(stateFile, state);
+    }
+  }
+  return results;
+}
+
 function delay(ms, signal) {
   if (signal?.aborted) return Promise.resolve();
   return new Promise((resolve) => {
@@ -190,10 +236,14 @@ function delay(ms, signal) {
   });
 }
 
-export async function watchPullRequests(options, { signal, check = checkForPullRequests, log = console.log } = {}) {
+export async function watchPullRequests(options, {
+  signal, check = checkForPullRequests,
+  syncMerged = syncMergedVerifiedPullRequests, log = console.log,
+} = {}) {
   do {
     try {
       await check({ ...options, log });
+      if (options.syncAfterMerge) await syncMerged({ log });
     } catch (error) {
       log("[watch-pr] polling error: " + String(error?.message ?? error));
       if (options.once) return false;
@@ -214,7 +264,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     console.log("[watch-pr] Listening for trusted " + (options.pr ? "PR #" + options.pr : "label " + options.label)
       + ", polling every " + options.intervalSeconds + "s");
     console.log("[watch-pr] Candidate code runs with your local user permissions. Never run this elevated.");
-    console.log("[watch-pr] Merge, publishing, global install and authenticated browser smoke are disabled.");
+    console.log("[watch-pr] PR merging, publishing, global install and authenticated browser smoke are disabled.");
+    if (options.syncAfterMerge) console.log("[watch-pr] Post-merge fast-forward sync enabled for clean checked-out development branch only; running processes are NOT restarted.");
     if (!options.postComment) console.log("[watch-pr] Feedback is local only; add --post-comment to publish sanitized results.");
     const success = await watchPullRequests(options, { signal: controller.signal });
     if (!success) process.exitCode = 1;

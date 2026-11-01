@@ -94,15 +94,20 @@ test("failed check blocks package and produces local failure report", async (t) 
 test("posting only occurs with opt-in and never includes raw test log", async (t) => {
   const { root, reports } = await fixture(t);
   const fake = fakeRun(root, { fail: "run" });
+  const requests = [];
+  const request = async (route, options) => {
+    requests.push({ route, options });
+    return { id: 123 };
+  };
   const result = await verifyPullRequest({
     pr: 8, postComment: true, root, reportRoot: reports,
-    run: fake.run, log() {},
+    run: fake.run, request, log() {},
   });
   assert.equal(result.commentPosted, true);
-  const call = fake.calls.find((item) => item.program === "gh");
-  assert.ok(call);
-  assert.ok(call.args.includes("repos/" + REPOSITORY + "/issues/8/comments"));
-  const body = call.args.find((arg) => arg.startsWith("body="));
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].route, "repos/" + REPOSITORY + "/issues/8/comments");
+  assert.equal(requests[0].options.method, "POST");
+  const body = requests[0].options.body.body;
   assert.match(body, /Check \| Exit/);
   assert.match(body, /Result: FAIL/);
   assert.match(body, /WT_VERIFY_V1 sha=0123456789abcdef0123456789abcdef01234567 result=FAIL/);
@@ -110,21 +115,26 @@ test("posting only occurs with opt-in and never includes raw test log", async (t
 });
 
 
-test("missing GitHub CLI cannot erase a completed local test report", async (t) => {
+test("GitHub API failure cannot erase a completed local test report", async (t) => {
   const { root, reports } = await fixture(t);
   const fake = fakeRun(root);
-  const run = (program, args, cwd) => {
-    if (program === "gh") throw new Error("gh not installed");
-    return fake.run(program, args, cwd);
+  let requests = 0;
+  const request = async () => {
+    requests++;
+    throw new Error("network unavailable");
   };
   const result = await verifyPullRequest({
     pr: 9, postComment: true, root, reportRoot: reports,
-    run, log() {},
+    run: fake.run, request, log() {},
   });
   assert.equal(result.ok, true);
   assert.equal(result.commentPosted, false);
-  assert.match(result.commentError, /GitHub CLI/);
-  assert.equal(JSON.parse(await fs.readFile(result.reportPath, "utf8")).sha, SHA);
+  assert.equal(requests, 1);
+  assert.match(result.commentError, /GitHub API/);
+  const saved = JSON.parse(await fs.readFile(result.reportPath, "utf8"));
+  assert.equal(saved.sha, SHA);
+  assert.equal(saved.ok, true);
+  assert.equal(saved.commentPosted, false);
 });
 
 
@@ -187,15 +197,22 @@ test("GitHub PR feedback includes bounded failing test identifiers, never raw fa
     }
     return fake.run(program, args, cwd);
   };
+  const requests = [];
+  const request = async (route, options) => {
+    requests.push({ route, options });
+    return { id: 123 };
+  };
   const report = await verifyPullRequest({
-    pr: 12, postComment: true, root, reportRoot: reports, run,
+    pr: 12, postComment: true, root, reportRoot: reports, run, request,
     checks: [{ name: "all-tests", program: "npm", args: ["test"] }],
     log() {},
   });
   assert.equal(report.ok, false);
   assert.deepEqual(report.steps[0].summary.failedTestIdentifiers, ["approval.test.js"]);
-  const body = fake.calls.find((item) => item.program === "gh")
-    .args.find((arg) => arg.startsWith("body="));
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].route, "repos/" + REPOSITORY + "/issues/12/comments");
+  assert.equal(requests[0].options.method, "POST");
+  const body = requests[0].options.body.body;
   assert.match(body, /Failed test identifiers/);
   assert.match(body, /approval\.test\.js/);
   assert.doesNotMatch(body, /PRIVATE_SECRET_TEST_OUTPUT_998877|Users|archi/);
