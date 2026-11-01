@@ -421,6 +421,7 @@ export class TaskCoordinator {
     const state = {
       schema: 2, planId, workspaceRoot: root, workspaceId,
       goal: checked.goal, status: "RUNNING", lastError: null,
+      planRevision: 0,
       repairBudget: emptyRepairBudget(),
       repairSubtask: null,
       repairExecution: null,
@@ -455,6 +456,10 @@ export class TaskCoordinator {
       || !/^[a-f0-9-]{36}$/.test(state.planId ?? "")
       || !Array.isArray(state.tasks)) {
       throw invalid("Coordinator checkpoint identity mismatch.", "STATE_UNSAFE");
+    }
+    state.planRevision ??= 0;
+    if (!Number.isSafeInteger(state.planRevision) || state.planRevision < 0) {
+      throw invalid("Invalid plan revision.", "STATE_UNSAFE");
     }
     const checked = validateTaskPlan({ goal: state.goal, tasks: state.tasks });
     if (checked.tasks.length !== state.tasks.length
@@ -562,6 +567,106 @@ export class TaskCoordinator {
   getDeliveryReport() {
     return buildDeliveryReport(this.state);
   }
+
+  /**
+   * Revisioned DAG replacement, restricted to never-started TODO nodes.
+   * Already running or verified work retains its exact task definition.
+   * The revision lock serializes independent Coordinator revision writers.
+   */
+  revisePlan({ expectedRevision, tasks } = {}) {
+    const action = this.mutations.catch(() => {}).then(async () => {
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0
+          || !Array.isArray(tasks)) {
+        throw invalid("A nonnegative expected revision and complete task DAG are required.",
+          "PLAN_REVISION_INVALID");
+      }
+      if (this.state.status !== "RUNNING"
+          || this.state.repairSubtask !== null
+          || this.state.repairExecution !== null) {
+        throw invalid("Plan changes require an active, unrepaired checkpoint.",
+          "PLAN_REVISION_BLOCKED");
+      }
+      if (expectedRevision !== this.state.planRevision) {
+        throw invalid("Expected plan revision is stale.", "PLAN_REVISION_CONFLICT");
+      }
+
+      const checked = validateTaskPlan({ goal: this.state.goal, tasks });
+      const updated = new Map(checked.tasks.map(task => [task.id, task]));
+      for (const existing of this.state.tasks) {
+        if (existing.status !== "TODO") {
+          const requested = updated.get(existing.id);
+          const immutable = {
+            id: existing.id, instruction: existing.instruction,
+            dependsOn: existing.dependsOn, acceptance: existing.acceptance,
+          };
+          if (!requested || JSON.stringify(requested) !== JSON.stringify(immutable)) {
+            throw invalid("Started and verified task definitions are immutable.",
+              "PLAN_REVISION_IMMUTABLE");
+          }
+        } else if (existing.supervisorTaskId !== null
+            || existing.baseline !== null || existing.evidence !== null
+            || existing.verificationReceipt !== null || existing.error !== null
+            || existing.verificationStarted === true) {
+          throw invalid("An incomplete task already contains execution evidence.",
+            "PLAN_REVISION_IMMUTABLE");
+        }
+      }
+
+      const existingById = new Map(this.state.tasks.map(task => [task.id, task]));
+      const replacement = checked.tasks.map(task => {
+        const prior = existingById.get(task.id);
+        if (prior && prior.status !== "TODO") return prior;
+        return {
+          ...task, status: "TODO", supervisorTaskId: null,
+          idempotencyKey: "autonomy:" + this.state.planId + ":" + task.id,
+          baseline: null, evidence: null, verificationReceipt: null, error: null,
+        };
+      });
+      if (this.state.planRevision === Number.MAX_SAFE_INTEGER) {
+        throw invalid("Plan revision exhausted.", "PLAN_REVISION_INVALID");
+      }
+
+      const lockPath = this.stateFile + ".revision.lock";
+      let lock;
+      try {
+        try {
+          lock = await fs.open(lockPath, "wx", 0o600);
+        } catch (error) {
+          if (error?.code === "EEXIST") {
+            throw invalid("Another plan revision is in progress.",
+              "PLAN_REVISION_LOCKED");
+          }
+          throw error;
+        }
+        const disk = JSON.parse(await fs.readFile(this.stateFile, "utf8"));
+        if (disk.planId !== this.state.planId
+            || (disk.planRevision ?? 0) !== expectedRevision
+            || disk.status !== this.state.status
+            || JSON.stringify(disk.tasks) !== JSON.stringify(this.state.tasks)) {
+          throw invalid("Concurrent plan change or task advancement detected.",
+            "PLAN_REVISION_CONFLICT");
+        }
+        const before = snapshot(this.state);
+        this.state.tasks = replacement;
+        this.state.planRevision = expectedRevision + 1;
+        try {
+          await this.#save();
+        } catch (error) {
+          this.state = before;
+          throw error;
+        }
+        return this.getState();
+      } finally {
+        if (lock) {
+          await lock.close();
+          await fs.rm(lockPath, { force: true });
+        }
+      }
+    });
+    this.mutations = action;
+    return action;
+  }
+
 
 
   /**
@@ -769,6 +874,10 @@ export class TaskCoordinator {
   }
 
   async #save() {
+    if (!Number.isSafeInteger(this.state.planRevision)
+        || this.state.planRevision < 0) {
+      throw invalid("Invalid plan revision.", "STATE_UNSAFE");
+    }
     this.state.repairBudget = validateRepairBudget(this.state.repairBudget);
     annotateCheckpointFailures(this.state);
     if (this.state.repairSubtask != null) {
