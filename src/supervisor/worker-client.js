@@ -1,6 +1,7 @@
 import { fork } from "node:child_process";
 import { TaskStoppedError } from "./task-control.js";
 import { safeRuntimeEvent } from "./recovery-controller.js";
+import { safeLiveEvent } from "./live-display.js";
 
 function workerError(code, details = null) {
   const error = new Error(typeof details?.message === "string" ? details.message : code);
@@ -35,6 +36,7 @@ export async function runWorkerProcess({
   control,
   approvalProvider,
   onEvent,
+  onDisplay = null,
   isWaitingApproval = () => false,
   onStart = () => {},
   forkProcess = fork,
@@ -159,7 +161,12 @@ export async function runWorkerProcess({
     // Preserve message ordering so durable event/approval updates are
     // completed before the result is observed by the Supervisor.
     processing = processing.then(async () => {
-      if (message.type === "event") {
+      if (message.type === "live") {
+        const event = safeLiveEvent(message.event);
+        if (event) {
+          try { await onDisplay?.(event); } catch { /* UI failures cannot fail Worker */ }
+        }
+      } else if (message.type === "event") {
         const event = safeRuntimeEvent(message.event);
         if (event.type === "tool.invalid") invalidActions++;
         else if (event.type === "model.message_complete") invalidActions = 0;
