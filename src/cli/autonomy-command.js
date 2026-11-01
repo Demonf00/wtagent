@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { TaskCoordinator, validateTaskPlan } from "../autonomy/task-coordinator.js";
+import { buildDeliveryReport } from "../autonomy/goal-delivery.js";
 import { GoalPlanner } from "../autonomy/goal-planner.js";
 import { TaskSupervisor } from "../supervisor/task-supervisor.js";
 import { resolveRuntimePaths } from "../runtime/conversation-runner.js";
@@ -134,6 +135,10 @@ export async function runAutonomyCommand({
           id: task.id, status: task.status, supervisorTaskId: task.supervisorTaskId,
           error: task.error,
         })),
+        delivery: {
+          ...buildDeliveryReport(state),
+          evidenceFreshness: "checkpoint_snapshot_not_revalidated",
+        },
       }
       : {
         planId: state.id, status: state.status, lastError: state.lastError,
@@ -230,6 +235,8 @@ export async function runAutonomyCommand({
       }
       if (state.status === "VERIFIED" || state.status === "BLOCKED") {
         output(`[Autonomy] ${state.status}${state.lastError ? ` (${state.lastError})` : ""}`);
+        const report = coordinator.getDeliveryReport();
+        output(`[Autonomy] Goal Delivery: ${report.status}; final checks ${report.evidencedFinalChecks}/${report.requiredFinalChecks}${report.reason ? ` (${report.reason})` : ""}`);
         return state;
       }
       if (supervisor.fatalError) throw supervisor.fatalError;

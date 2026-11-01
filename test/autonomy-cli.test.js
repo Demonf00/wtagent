@@ -67,6 +67,11 @@ test("P2 autonomy CLI start, resume and status use persistent real Supervisor st
   assert.equal(summary.status, "VERIFIED");
   assert.equal(summary.tasks.length, 3);
   assert.ok(output.some((item) => item.includes("[Autonomy] VERIFIED")));
+  assert.ok(output.some((item) => item.includes("Goal Delivery: UNVERIFIED")));
+  assert.equal(summary.delivery.status, "UNVERIFIED");
+  assert.equal(summary.delivery.requiredFinalChecks, 0);
+  assert.equal(summary.delivery.evidencedFinalChecks, 0);
+  assert.equal(summary.delivery.evidenceFreshness, "checkpoint_snapshot_not_revalidated");
 
   const entry = fileURLToPath(new URL("../src/cli/main.js", import.meta.url));
   const processResult = spawnSync(process.execPath, [
@@ -76,6 +81,8 @@ test("P2 autonomy CLI start, resume and status use persistent real Supervisor st
   const fromCli = JSON.parse(processResult.stdout);
   assert.equal(fromCli.status, "VERIFIED");
   assert.deepEqual(fromCli.tasks.map((item) => item.status), ["VERIFIED", "VERIFIED", "VERIFIED"]);
+  assert.equal(fromCli.delivery.status, "UNVERIFIED");
+  assert.equal(fromCli.delivery.unverifiedCapabilities.length, 1);
 });
 
 test("P2 autonomy CLI blocks missing artifacts without executing dependent tasks", async (t) => {

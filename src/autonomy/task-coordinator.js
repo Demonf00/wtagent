@@ -13,6 +13,9 @@ import {
   assertSavedHttpEvidence,
 } from "./http-verifier.js";
 import { assertVerificationInputsUnchanged } from "./verification-inputs.js";
+import {
+  makeGoalReceipt, assertGoalReceipt, buildDeliveryReport,
+} from "./goal-delivery.js";
 
 const TASK_ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 const HASH = /^[a-f0-9]{64}$/;
@@ -158,7 +161,28 @@ export function validateTaskPlan(input) {
     visited.add(id);
   }
   for (const task of tasks) visit(task.id);
-  return { goal: input.goal, tasks };
+  let finalAcceptance = [];
+  if (input.finalAcceptance !== undefined) {
+    if (!Array.isArray(input.finalAcceptance)
+      || input.finalAcceptance.length < 1 || input.finalAcceptance.length > 16
+      || input.finalAcceptance.some((check) =>
+        !check || !["test", "integration"].includes(check.kind))) {
+      throw invalid("Final goal acceptance requires 1 to 16 real test or integration checks.");
+    }
+    // Reuse exactly the same strict acceptance normalization as worker tasks.
+    // No nested finalAcceptance is passed into this one-task validation.
+    finalAcceptance = validateTaskPlan({
+      goal: "Final functional verification",
+      tasks: [{
+        id: "final", instruction: "Verify the overall goal",
+        dependsOn: [], acceptance: input.finalAcceptance,
+      }],
+    }).tasks[0].acceptance;
+  }
+  return {
+    goal: input.goal, tasks,
+    ...(input.finalAcceptance === undefined ? {} : { finalAcceptance }),
+  };
 }
 
 async function persist(file, state) {
@@ -346,6 +370,11 @@ export class TaskCoordinator {
     const state = {
       schema: 2, planId, workspaceRoot: root, workspaceId,
       goal: checked.goal, status: "RUNNING", lastError: null,
+      goalDelivery: {
+        status: checked.finalAcceptance?.length ? "PENDING" : "UNVERIFIED",
+        acceptance: checked.finalAcceptance ?? [],
+        verificationStarted: false, evidence: null, receipt: null, error: null,
+      },
       tasks: checked.tasks.map((task) => ({
         ...task, status: "TODO", supervisorTaskId: null,
         idempotencyKey: `autonomy:${planId}:${task.id}`,
@@ -409,6 +438,43 @@ export class TaskCoordinator {
         }
       }
     }
+    // Checkpoints written before FV-06 did not declare whole-goal acceptance.
+    // They may remain task-VERIFIED but can never inherit DELIVERED status.
+    if (state.goalDelivery === undefined) {
+      state.goalDelivery = {
+        status: "UNVERIFIED", acceptance: [], verificationStarted: false,
+        evidence: null, receipt: null, error: null,
+      };
+    } else {
+      const delivery = state.goalDelivery;
+      if (!delivery || typeof delivery !== "object" || Array.isArray(delivery)
+        || !["UNVERIFIED", "PENDING", "DELIVERED", "BLOCKED"].includes(delivery.status)
+        || !Array.isArray(delivery.acceptance)
+        || typeof delivery.verificationStarted !== "boolean"
+        || (delivery.status === "UNVERIFIED"
+          ? delivery.acceptance.length !== 0 || delivery.evidence !== null
+            || delivery.receipt !== null
+          : delivery.acceptance.length === 0)
+        || (delivery.status === "DELIVERED"
+          && (state.status !== "VERIFIED" || delivery.verificationStarted))
+        || (state.status === "VERIFIED"
+          && !["DELIVERED", "UNVERIFIED"].includes(delivery.status))
+        || (delivery.status === "BLOCKED" && state.status !== "BLOCKED")
+        || (state.status === "BLOCKED" && delivery.status === "DELIVERED")
+        || (delivery.status === "PENDING"
+          && (delivery.evidence !== null || delivery.receipt !== null))
+        || (delivery.status !== "DELIVERED" && delivery.receipt !== null)) {
+        throw invalid("Invalid persisted goal delivery state.", "STATE_UNSAFE");
+      }
+      const normalized = validateTaskPlan({
+        goal: state.goal, tasks: state.tasks,
+        ...(delivery.acceptance.length ? { finalAcceptance: delivery.acceptance } : {}),
+      }).finalAcceptance ?? [];
+      if (JSON.stringify(normalized) !== JSON.stringify(delivery.acceptance)) {
+        throw invalid("Persisted final acceptance differs from approved checks.", "STATE_UNSAFE");
+      }
+      if (delivery.status === "DELIVERED") assertGoalReceipt(state);
+    }
     return new TaskCoordinator({ stateFile: file, workspaceRoot: root, workspaceId, supervisor, state });
   }
 
@@ -416,8 +482,62 @@ export class TaskCoordinator {
     return snapshot(this.state);
   }
 
+  getDeliveryReport() {
+    return buildDeliveryReport(this.state);
+  }
+
   async #save() {
     await persist(this.stateFile, this.state);
+  }
+
+  async #finishVerifiedTasks() {
+    if (!this.state.tasks.every((task) => task.status === "VERIFIED")) {
+      throw invalid("Cannot finish a goal before every task is verified.", "STATE_UNSAFE");
+    }
+    const delivery = this.state.goalDelivery;
+    if (!delivery?.acceptance.length) {
+      // Legacy plans remain task-complete, never goal-delivered.
+      this.state.status = "VERIFIED";
+      await this.#save();
+      return this.getState();
+    }
+    try {
+      if (delivery.status === "DELIVERED") {
+        assertGoalReceipt(this.state);
+        await verifyArtifacts(this.workspaceRoot, {
+          acceptance: delivery.acceptance, baseline: delivery.baseline,
+        }, delivery.evidence);
+        this.state.status = "VERIFIED";
+        return this.getState();
+      }
+      if (delivery.status !== "PENDING" || delivery.verificationStarted) {
+        throw invalid("Final verification was interrupted or its outcome is unknown.",
+          "GOAL_COMPLETION_UNKNOWN");
+      }
+      delivery.baseline = await captureBaseline(this.workspaceRoot, {
+        acceptance: delivery.acceptance,
+      });
+      // Commit the no-replay boundary BEFORE running any test or HTTP probe.
+      delivery.verificationStarted = true;
+      await this.#save();
+      delivery.evidence = await verifyArtifacts(this.workspaceRoot, {
+        acceptance: delivery.acceptance, baseline: delivery.baseline,
+      });
+      delivery.status = "DELIVERED";
+      delivery.receipt = makeGoalReceipt(this.state);
+      delivery.verificationStarted = false;
+      delivery.error = null;
+      this.state.status = "VERIFIED";
+      this.state.lastError = null;
+      await this.#save();
+    } catch (error) {
+      delivery.status = "BLOCKED";
+      delivery.error = error.code ?? "GOAL_VERIFICATION_FAILED";
+      this.state.status = "BLOCKED";
+      this.state.lastError = delivery.error;
+      await this.#save();
+    }
+    return this.getState();
   }
 
   async #advance({ resumePaused = false } = {}) {
@@ -432,6 +552,11 @@ export class TaskCoordinator {
           }
           await verifyArtifacts(this.workspaceRoot, task, task.evidence);
         } catch (error) {
+          if (this.state.goalDelivery?.status === "DELIVERED") {
+            this.state.goalDelivery.status = "BLOCKED";
+            this.state.goalDelivery.receipt = null;
+            this.state.goalDelivery.error = error.code ?? "ARTIFACT_DRIFT";
+          }
           this.state.status = "BLOCKED";
           this.state.lastError = error.code ?? "ARTIFACT_DRIFT";
           await this.#save();
@@ -440,6 +565,23 @@ export class TaskCoordinator {
       }
     }
 
+    if (this.state.goalDelivery?.status === "DELIVERED") {
+      try {
+        assertGoalReceipt(this.state);
+        await verifyArtifacts(this.workspaceRoot, {
+          acceptance: this.state.goalDelivery.acceptance,
+          baseline: this.state.goalDelivery.baseline,
+        }, this.state.goalDelivery.evidence);
+      } catch (error) {
+        this.state.goalDelivery.status = "BLOCKED";
+        this.state.goalDelivery.receipt = null;
+        this.state.goalDelivery.error = error.code ?? "GOAL_EVIDENCE_INVALID";
+        this.state.status = "BLOCKED";
+        this.state.lastError = this.state.goalDelivery.error;
+        await this.#save();
+        return this.getState();
+      }
+    }
     if (this.state.status === "VERIFIED") return this.getState();
 
     let active = this.state.tasks.find((task) => task.status === "RUNNING" || task.status === "VERIFYING");
@@ -448,9 +590,11 @@ export class TaskCoordinator {
         task.status === "TODO" && task.dependsOn.every((id) =>
           this.state.tasks.find((item) => item.id === id)?.status === "VERIFIED"));
       if (!active) {
-        this.state.status = this.state.tasks.every((task) => task.status === "VERIFIED")
-          ? "VERIFIED" : "BLOCKED";
-        this.state.lastError = this.state.status === "BLOCKED" ? "UNSATISFIED_DEPENDENCIES" : null;
+        if (this.state.tasks.every((task) => task.status === "VERIFIED")) {
+          return this.#finishVerifiedTasks();
+        }
+        this.state.status = "BLOCKED";
+        this.state.lastError = "UNSATISFIED_DEPENDENCIES";
         await this.#save();
         return this.getState();
       }
@@ -559,8 +703,7 @@ export class TaskCoordinator {
       await this.#save();
     }
     if (this.state.tasks.every((task) => task.status === "VERIFIED")) {
-      this.state.status = "VERIFIED";
-      await this.#save();
+      return this.#finishVerifiedTasks();
     }
     return this.getState();
   }
