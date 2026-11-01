@@ -4,6 +4,7 @@ import { AgentSession } from "../session/agent-session.js";
 import { TaskSupervisor } from "../supervisor/task-supervisor.js";
 import { isProcessAlive } from "../browser/cdp-state.js";
 import { ApprovalStore } from "../policy/approval-store.js";
+import { formatLiveEvent } from "../supervisor/live-display.js";
 import { promptForSelect, ShellChatInput } from "./prompt-input.js";
 
 const TERMINAL = new Set(["completed", "cancelled", "paused", "blocked_uncertain", "failed"]);
@@ -143,6 +144,10 @@ dataDir: path.join(session.directory, "supervisor"),
 sessionsDir,
 workspaces: [{ id: "cli", root: session.state.projectRoot }],
 options,
+onDisplay: (event) => {
+  const line = formatLiveEvent(event);
+  if (line) output(line);
+},
 });
 await supervisor.init();
 output(`[Supervisor] Session ${session.sessionId}; isolated Worker execution`);
