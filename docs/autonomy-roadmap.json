@@ -363,7 +363,7 @@
     {
       "id": "FR-02",
       "phase": "Failure Resolution",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "FR-01"
       ],
@@ -378,14 +378,19 @@
         "Restart does not reset budget",
         "No approval escalation by retries"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "3059070eb2162ed04bdf65c3c589b02f0f823aa4",
+      "testEvidence": {
+        "focused": "node --test test/autonomy-repair-budget.test.js test/autonomy-failure-classifier.test.js test/autonomy-coordinator.test.js: 40 passed",
+        "full": "node --test: 897 total, 884 passed, 13 skipped, 0 failed",
+        "syntax": "node scripts/check-syntax.js: 174 files",
+        "diff": "git diff --check: passed"
+      },
+      "notes": "Durable max-three repair reservations with same-error loop stop after two, unknown outcome fail-closed, restart-safe and concurrent serialization, no Worker launch or approval escalation. Artifact ENOENT classified only within verified artifact checks; unsafe paths excluded."
     },
     {
       "id": "FR-03",
       "phase": "Failure Resolution",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "FR-02"
       ],
