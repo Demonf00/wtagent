@@ -254,7 +254,7 @@
     {
       "id": "RR-01",
       "phase": "Runtime Reliability",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "FV-06"
       ],
@@ -269,14 +269,18 @@
         "No duplicate side effects",
         "Exactly one recognized handoff identity"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "c646b20afab173a4db946eeb9979436035de0ad4",
+      "testEvidence": {
+        "focused": "node --test --test-name-pattern RR-01 test/runtime.test.js: 2 passed",
+        "full": "node --test: 879 total, 866 passed, 13 skipped, 0 failed",
+        "syntax": "node scripts/check-syntax.js: 168 files"
+      },
+      "notes": "Fault injection verifies no resend after persisted handoff loses acknowledgement, idempotent duplicate handoff callback, and fs.write executes once after dropped result acknowledgement plus duplicated tool proposal."
     },
     {
       "id": "RR-02",
       "phase": "Runtime Reliability",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "RR-01"
       ],
