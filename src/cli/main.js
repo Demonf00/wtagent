@@ -940,6 +940,21 @@ autonomyCommand
   });
 
 autonomyCommand
+  .command("repair")
+  .description("Explicitly execute one bounded repair of a blocked artifact check")
+  .requiredOption("--state <path>", "Existing checkpoint JSON path")
+  .option("--timeout-ms <milliseconds>", "Maximum repair and follow-up execution time", "120000")
+  .action(async (_, command) => {
+    assertNativeRuntimeSupported();
+    const opts = command.optsWithGlobals();
+    const result = await runAutonomyCommand({
+      action: "repair", stateFile: opts.state,
+      options: opts, timeoutMs: Number(opts.timeoutMs),
+    });
+    if (result.status !== "VERIFIED") process.exitCode = 1;
+  });
+
+autonomyCommand
   .command("status")
   .description("Show the persisted task-plan checkpoint")
   .requiredOption("--state <path>", "Existing checkpoint JSON path")

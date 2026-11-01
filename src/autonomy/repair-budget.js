@@ -52,9 +52,10 @@ export function validateRepairBudget(value) {
     const entry = value.attempts[i];
     if (!entry || typeof entry !== "object" || Array.isArray(entry)
         || entry.sequence !== i + 1 || !CODE.test(entry.triggerCode)
-        || !["RESERVED", "FAILED"].includes(entry.status)
+        || !["RESERVED", "FAILED", "SUCCEEDED"].includes(entry.status)
         || (entry.status === "RESERVED" && entry.resultCode !== null)
         || (entry.status === "FAILED" && !CODE.test(entry.resultCode))
+        || (entry.status === "SUCCEEDED" && entry.resultCode !== null)
         || (entry.status === "RESERVED" && i !== value.attempts.length - 1)) {
       throw reject("REPAIR_BUDGET_UNSAFE");
     }
@@ -68,6 +69,9 @@ export function repairStopReason(value) {
   if (!entries.length) return null;
   const last = entries.at(-1);
   if (last.status === "RESERVED") return "REPAIR_ATTEMPT_OUTCOME_UNKNOWN";
+  if (last.status === "SUCCEEDED") {
+    return entries.length >= REPAIR_LIMITS.maxAttempts ? "REPAIR_ATTEMPTS_EXHAUSTED" : null;
+  }
   if (!ALLOWED.has(classifyFailure(last.resultCode).kind)) {
     return "REPAIR_FAILURE_NOT_REPAIRABLE";
   }
@@ -116,4 +120,19 @@ export function failRepairAttempt(value, { sequence, errorCode }) {
   target.resultCode = code;
   target.status = "FAILED";
   return { budget: next, stopCode: repairStopReason(next) };
+}
+
+/**
+ * Settle a successful repair only after independent verification. Unlike a
+ * failure, success does not reset the plan-wide attempt budget.
+ */
+export function succeedRepairAttempt(value, { sequence }) {
+  const budget = validateRepairBudget(value);
+  const last = budget.attempts.at(-1);
+  if (!last || last.status !== "RESERVED" || last.sequence !== sequence) {
+    throw reject("REPAIR_ATTEMPT_NOT_RESERVED");
+  }
+  const next = structuredClone(budget);
+  next.attempts.at(-1).status = "SUCCEEDED";
+  return next;
 }

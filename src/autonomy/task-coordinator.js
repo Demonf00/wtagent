@@ -4,7 +4,7 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { replaceFileAtomic } from "../shared/atomic-write.js";
 import { annotateCheckpointFailures } from "./failure-classifier.js";
-import { emptyRepairBudget, validateRepairBudget, reserveRepairAttempt, failRepairAttempt, repairStopReason } from "./repair-budget.js";
+import { emptyRepairBudget, validateRepairBudget, reserveRepairAttempt, failRepairAttempt, succeedRepairAttempt, repairStopReason } from "./repair-budget.js";
 import { buildRepairSubtask, assertRepairSubtask } from "./repair-subtask.js";
 import { executeCommandCheck, commandCheckHash } from "./command-verifier.js";
 import { makeVerificationReceipt, assertVerificationReceipt } from "./verification-receipt.js";
@@ -351,6 +351,45 @@ function snapshot(value) {
  * it must not create multiple independent coordinators for the same stateFile.
  * A stopped/uncertain Supervisor task is never automatically resubmitted.
  */
+
+/**
+ * An execution record is an intent persisted before Supervisor.create.
+ * SUBMITTING may be recovered solely through the Supervisor's stable,
+ * durable idempotency key. RUNNING / VERIFYING must have authentic identity.
+ */
+function assertRepairExecution(state, execution, supervisor) {
+  if (!execution || typeof execution !== "object" || Array.isArray(execution)) {
+    throw invalid("Repair execution record is invalid.", "REPAIR_EXECUTION_UNSAFE");
+  }
+  const proposal = state.repairSubtask;
+  const attempt = state.repairBudget?.attempts?.at(-1);
+  if (state.status !== "BLOCKED" || !proposal
+      || execution.schema !== 1
+      || !["SUBMITTING", "RUNNING", "VERIFYING"].includes(execution.phase)
+      || execution.attemptSequence !== proposal.attemptSequence
+      || execution.idempotencyKey !== proposal.idempotencyKey
+      || execution.instruction !== proposal.instruction
+      || attempt?.status !== "RESERVED"
+      || attempt.sequence !== execution.attemptSequence
+      || ((execution.phase === "SUBMITTING") !== (execution.supervisorTaskId === null))) {
+    throw invalid("Repair execution identity does not match reservation.", "REPAIR_EXECUTION_UNSAFE");
+  }
+  if (execution.supervisorTaskId !== null) {
+    if (!/^task_[a-f0-9-]{36}$/.test(execution.supervisorTaskId)) {
+      throw invalid("Repair Supervisor ID is invalid.", "REPAIR_EXECUTION_UNSAFE");
+    }
+    const record = supervisor.get(execution.supervisorTaskId);
+    if (!record || record.taskId !== execution.supervisorTaskId
+        || record.idempotencyKey !== proposal.idempotencyKey
+        || record.instruction !== proposal.instruction
+        || record.workspaceId !== state.workspaceId
+        || record.workspaceRoot !== state.workspaceRoot) {
+      throw invalid("Repair Supervisor identity mismatch.", "REPAIR_EXECUTION_UNSAFE");
+    }
+  }
+  return true;
+}
+
 export class TaskCoordinator {
   constructor({ stateFile, workspaceRoot, workspaceId, supervisor, state }) {
     this.stateFile = stateFile;
@@ -384,6 +423,7 @@ export class TaskCoordinator {
       goal: checked.goal, status: "RUNNING", lastError: null,
       repairBudget: emptyRepairBudget(),
       repairSubtask: null,
+      repairExecution: null,
       goalDelivery: {
         status: checked.finalAcceptance?.length ? "PENDING" : "UNVERIFIED",
         acceptance: checked.finalAcceptance ?? [],
@@ -495,12 +535,20 @@ export class TaskCoordinator {
       throw invalid("Invalid persisted repair budget.", "STATE_UNSAFE");
     }
     state.repairSubtask ??= null;
+    state.repairExecution ??= null;
     if (state.repairSubtask !== null) {
       try {
         const taskId = state.repairSubtask.sourceSupervisorTaskId;
         assertRepairSubtask(state, state.repairSubtask, supervisor.get(taskId));
       } catch {
         throw invalid("Invalid persisted repair subtask.", "STATE_UNSAFE");
+      }
+    }
+    if (state.repairExecution !== null) {
+      try {
+        assertRepairExecution(state, state.repairExecution, supervisor);
+      } catch {
+        throw invalid("Invalid persisted repair execution.", "STATE_UNSAFE");
       }
     }
     annotateCheckpointFailures(state);
@@ -556,6 +604,125 @@ export class TaskCoordinator {
    * it never unblocks a task, launches a Worker, or requests approval.
    * A RESERVED attempt stays non-replayable after a crash.
    */
+
+  /**
+   * Start only an explicitly prepared repair. The original task remains
+   * BLOCKED throughout execution; no normal tick can replay it.
+   */
+  repairTick() {
+    const action = this.mutations.catch(() => {}).then(async () => {
+      if (this.state.status !== "BLOCKED" || !this.state.repairSubtask) {
+        throw invalid("An explicit prepared repair is required.", "REPAIR_NOT_PREPARED");
+      }
+      const proposal = this.state.repairSubtask;
+      assertRepairSubtask(this.state, proposal,
+        this.supervisor.get(proposal.sourceSupervisorTaskId));
+
+      if (this.state.repairExecution === null) {
+        this.state.repairExecution = {
+          schema: 1, phase: "SUBMITTING",
+          attemptSequence: proposal.attemptSequence,
+          idempotencyKey: proposal.idempotencyKey,
+          instruction: proposal.instruction,
+          supervisorTaskId: null,
+        };
+        await this.#save();
+      }
+      let execution = this.state.repairExecution;
+      assertRepairExecution(this.state, execution, this.supervisor);
+
+      if (execution.phase === "SUBMITTING") {
+        // Same instruction and durable key: Supervisor.create must deduplicate.
+        // Never synthesize another key after an interrupted submission.
+        const created = await this.supervisor.create({
+          workspaceId: this.workspaceId,
+          instruction: proposal.instruction,
+          idempotencyKey: proposal.idempotencyKey,
+        });
+        if (!/^task_[a-f0-9-]{36}$/.test(created?.taskId ?? "")) {
+          throw invalid("Invalid repair Supervisor response.", "REPAIR_SUPERVISOR_UNSAFE");
+        }
+        execution.supervisorTaskId = created.taskId;
+        execution.phase = "RUNNING";
+        await this.#save();
+        assertRepairExecution(this.state, execution, this.supervisor);
+      }
+      const supervisorTask = this.supervisor.get(execution.supervisorTaskId);
+      if (STOPPED.has(supervisorTask.status)) {
+        return this.#finishFailedRepair("SUPERVISOR_" + supervisorTask.status.toUpperCase());
+      }
+      if (execution.phase === "RUNNING") {
+        if (supervisorTask.status !== "completed") return this.getState();
+        execution.phase = "VERIFYING";
+        await this.#save();
+      }
+      if (supervisorTask.status !== "completed") {
+        return this.#finishFailedRepair("SUPERVISOR_NOT_COMPLETED");
+      }
+      // Verification failures are repair failures. Persistence failures are not:
+      // a failed checkpoint write must never settle the budget as FAILED.
+      const original = this.state.tasks.find(t => t.id === proposal.sourceTaskId);
+      let evidence;
+      let receipt;
+      try {
+        for (const task of this.state.tasks) {
+          if (task.status !== "VERIFIED") continue;
+          if (this.state.schema >= 2) assertVerificationReceipt(this.state, task);
+          await verifyArtifacts(this.workspaceRoot, task, task.evidence);
+        }
+        evidence = await verifyArtifacts(this.workspaceRoot, original);
+        receipt = this.state.schema >= 2
+          ? makeVerificationReceipt(this.state, original, evidence) : null;
+      } catch (error) {
+        return this.#finishFailedRepair(error?.code ?? "ARTIFACT_CHECK_FAILED");
+      }
+
+      const settledBudget = succeedRepairAttempt(this.state.repairBudget, {
+        sequence: proposal.attemptSequence,
+      });
+      const beforeCommit = snapshot(this.state);
+      original.evidence = evidence;
+      original.verificationReceipt = receipt;
+      original.status = "VERIFIED";
+      original.error = null;
+      original.verificationStarted = false;
+      this.state.repairBudget = settledBudget;
+      this.state.repairExecution = null;
+      this.state.repairSubtask = null;
+      this.state.status = "RUNNING";
+      this.state.lastError = null;
+      try {
+        await this.#save();
+      } catch (error) {
+        // Keep this instance coherent with the last known persisted state.
+        // A new process must reload before continuing if the write outcome
+        // itself is uncertain; a matching Supervisor task is never replayed.
+        this.state = beforeCommit;
+        throw error;
+      }
+      return this.getState();
+    });
+    this.mutations = action;
+    return action;
+  }
+
+  async #finishFailedRepair(errorCode) {
+    const proposal = this.state.repairSubtask;
+    const { budget } = failRepairAttempt(this.state.repairBudget, {
+      sequence: proposal.attemptSequence, errorCode,
+    });
+    const original = this.state.tasks.find(t => t.id === proposal.sourceTaskId);
+    original.status = "BLOCKED";
+    original.error = errorCode;
+    this.state.repairBudget = budget;
+    this.state.repairExecution = null;
+    this.state.repairSubtask = null;
+    this.state.status = "BLOCKED";
+    this.state.lastError = errorCode;
+    await this.#save();
+    return this.getState();
+  }
+
   reserveRepair({ errorCode } = {}) {
     const action = this.mutations.catch(() => {}).then(async () => {
       if (this.state.status !== "BLOCKED") {
@@ -586,6 +753,9 @@ export class TaskCoordinator {
       if (this.state.status !== "BLOCKED") {
         throw invalid("Repair requires a blocked checkpoint.", "REPAIR_NOT_BLOCKED");
       }
+      if (this.state.repairExecution !== null) {
+        throw invalid("Cannot manually settle an active repair.", "REPAIR_EXECUTION_ACTIVE");
+      }
       const { budget, stopCode } = failRepairAttempt(this.state.repairBudget, {
         sequence, errorCode,
       });
@@ -605,6 +775,9 @@ export class TaskCoordinator {
       const proposal = this.state.repairSubtask;
       assertRepairSubtask(this.state, proposal,
         this.supervisor.get(proposal.sourceSupervisorTaskId));
+    }
+    if (this.state.repairExecution !== null) {
+      assertRepairExecution(this.state, this.state.repairExecution, this.supervisor);
     }
     await persist(this.stateFile, this.state);
   }

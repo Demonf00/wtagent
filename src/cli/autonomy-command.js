@@ -94,7 +94,7 @@ export async function runAutonomyCommand({
   output = console.log, createSupervisor = (config) => new TaskSupervisor(config),
   timeoutMs = 120000, pollMs = POLL_MS,
 }) {
-  if (!["goal", "start", "resume", "status"].includes(action)) throw fail("Invalid autonomy action.");
+  if (!["goal", "start", "resume", "repair", "status"].includes(action)) throw fail("Invalid autonomy action.");
   if (action === "goal" && (typeof goal !== "string" || !goal.trim()
       || Buffer.byteLength(goal, "utf8") > 8192)) {
     throw fail("goal requires a nonempty instruction no larger than 8 KiB.");
@@ -172,6 +172,9 @@ export async function runAutonomyCommand({
     if (action === "start" && hasPlanner) {
       throw fail("The state belongs to an existing goal. Use resume instead.", "STATE_EXISTS");
     }
+    if (action === "repair" && !hasExecution) {
+      throw fail("Repair requires an existing execution checkpoint.", "AUTONOMY_STATE_NOT_FOUND");
+    }
     if (action === "resume" && !hasExecution && !hasPlanner) {
       throw fail("No autonomy checkpoint exists.", "AUTONOMY_STATE_NOT_FOUND");
     }
@@ -179,8 +182,11 @@ export async function runAutonomyCommand({
     let coordinator;
     if (action === "start") {
       coordinator = await TaskCoordinator.create({ ...params, plan });
-    } else if (action === "resume" && hasExecution) {
+    } else if ((action === "resume" || action === "repair") && hasExecution) {
       coordinator = await TaskCoordinator.load(params);
+      if (action === "repair" && coordinator.getState().repairSubtask === null) {
+        await coordinator.prepareRepairSubtask();
+      }
     } else {
       const planner = action === "goal"
         ? await GoalPlanner.create({ ...params, goal })
@@ -223,17 +229,23 @@ export async function runAutonomyCommand({
     // one-time paused-task resumption. Never repeatedly resume on polling.
     let resumeExistingPaused = action === "resume" && hasExecution;
     while (Date.now() < deadline) {
-      const state = await coordinator.tick({ resumePaused: resumeExistingPaused });
+      const before = coordinator.getState();
+      const continueRepair = before.repairExecution !== null
+        || (action === "repair" && before.repairSubtask !== null);
+      const state = continueRepair
+        ? await coordinator.repairTick()
+        : await coordinator.tick({ resumePaused: resumeExistingPaused });
       resumeExistingPaused = false;
       const active = state.tasks.find((task) =>
         task.status === "RUNNING" || task.status === "VERIFYING");
       await denyPendingApproval(supervisor, active?.supervisorTaskId, output, "executor");
-      const progress = `${state.status}:${state.tasks.map((task) => task.status).join(",")}`;
+      await denyPendingApproval(supervisor, state.repairExecution?.supervisorTaskId, output, "repair");
+      const progress = `${state.status}:${state.tasks.map((task) => task.status).join(",")}:${state.repairExecution?.phase ?? "none"}`;
       if (progress !== previous) {
         output(`[Autonomy] ${progress}`);
         previous = progress;
       }
-      if (state.status === "VERIFIED" || state.status === "BLOCKED") {
+      if (state.status === "VERIFIED" || (state.status === "BLOCKED" && !state.repairExecution)) {
         output(`[Autonomy] ${state.status}${state.lastError ? ` (${state.lastError})` : ""}`);
         const report = coordinator.getDeliveryReport();
         output(`[Autonomy] Goal Delivery: ${report.status}; final checks ${report.evidencedFinalChecks}/${report.requiredFinalChecks}${report.reason ? ` (${report.reason})` : ""}`);
