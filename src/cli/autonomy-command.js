@@ -96,6 +96,7 @@ export async function runAutonomyCommand({
   output = console.log, createSupervisor = (config) => new TaskSupervisor(config),
   timeoutMs = 120000, pollMs = POLL_MS,
   conversationSessionId = null,
+  onObservation = null,
 }) {
   if (!["goal", "start", "resume", "repair", "status"].includes(action)) throw fail("Invalid autonomy action.");
   if (conversationSessionId !== null
@@ -284,6 +285,14 @@ export async function runAutonomyCommand({
       resumeExistingPaused = false;
       const active = state.tasks.find((task) =>
         task.status === "RUNNING" || task.status === "VERIFYING");
+      if (onObservation) {
+        // Capture the approval request before the existing deny-by-default
+        // control runs. Observation cannot authorize a tool operation.
+        await onObservation({
+          coordinatorState: state,
+          supervisorTasks: supervisor.list(),
+        });
+      }
       await denyPendingApproval(supervisor, active?.supervisorTaskId, output, "executor");
       await denyPendingApproval(supervisor, state.repairExecution?.supervisorTaskId, output, "repair");
       const progress = `${state.status}:${state.tasks.map((task) => task.status).join(",")}:${state.repairExecution?.phase ?? "none"}`;

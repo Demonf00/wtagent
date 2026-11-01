@@ -32,6 +32,7 @@ import { executeSupervisorSession } from "./supervisor-session.js";
 import { inspectSessionContext, prepareContextRotation } from "../context/context-manager.js";
 import { runAutonomyCommand } from "./autonomy-command.js";
 import { runDurableOrchestrator, readDurableOrchestratorState } from "../autonomy/durable-orchestrator.js";
+import { createHeartbeatNotifier } from "../supervisor/heartbeat-notifier.js";
 import {
   inspectOrchestratorOwner, recoverStaleOrchestratorOwner,
 } from "../autonomy/orchestrator-ownership.js";
@@ -983,6 +984,11 @@ autonomyCommand
   .action(async (_, command) => {
     assertNativeRuntimeSupported();
     const opts = command.optsWithGlobals();
+    const notifier = createHeartbeatNotifier({
+      stateFile: opts.state,
+      notify: event => console.log(
+        `[Notification] ${event.severity}: ${event.type} — ${event.message}`),
+    });
     const result = await runDurableOrchestrator({
       stateFile: opts.state,
       workspaceRoot: opts.project ?? process.cwd(),
@@ -997,6 +1003,7 @@ autonomyCommand
         action: slice.action, goal: slice.goal,
         planFile: slice.planFile, stateFile: slice.stateFile,
         options: opts, timeoutMs: slice.timeoutMs,
+        onObservation: event => notifier.observe(event),
       }),
     });
     console.log(`[Orchestrator] ${result.status}; checkpoint=${opts.state}.orchestrator.json`);
