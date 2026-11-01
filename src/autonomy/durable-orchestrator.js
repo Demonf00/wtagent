@@ -4,6 +4,10 @@ import { randomUUID } from "node:crypto";
 import {
   acquireOrchestratorOwner, orchestratorOwnerPaths,
 } from "./orchestrator-ownership.js";
+import {
+  normalizeBudgetLimits,makeGoalBudget,validateGoalBudget,
+  budgetAllowance,reserveGoalBudget,settleGoalBudget,recoverOrphanedBudget,
+} from "./goal-budget.js";
 
 const SCHEMA = 1;
 const STOPPED = new Set(["COMPLETE", "BLOCKED", "PAUSED", "UNCERTAIN"]);
@@ -62,6 +66,7 @@ function validateState(value, workspaceRoot, stateFile) {
     || !(value.planFile === null || typeof value.planFile === "string")) {
     throw failure("ORCHESTRATOR_STATE_UNSAFE", "Orchestration identity is invalid.");
   }
+  if(value.budget!==undefined)validateGoalBudget(value.budget);
   return value;
 }
 
@@ -82,6 +87,7 @@ export async function runDurableOrchestrator({
   stateFile, workspaceRoot, goal = null, planFile = null,
   runSlice, maxCycles = 8, sliceMs = 15000,
   cooldownMs = 1000, maxRunMs = 120000,
+  budgetLimits = null, signal = null,
   now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
   onState = () => {},
 } = {}) {
@@ -94,6 +100,10 @@ export async function runDurableOrchestrator({
   integer(sliceMs, 10, 300000, "sliceMs");
   integer(cooldownMs, 100, 3600000, "cooldownMs");
   integer(maxRunMs, 10, 3600000, "maxRunMs");
+  const configuredBudget=normalizeBudgetLimits(budgetLimits);
+  if(signal!==null&&typeof signal?.aborted!=="boolean"){
+    throw failure("ORCHESTRATOR_OPTIONS_INVALID","Invalid cancellation signal.");
+  }
   const root = await fs.realpath(path.resolve(workspaceRoot));
   const checkpoint = path.resolve(stateFile);
   // Match the underlying Autonomy CLI's workspace isolation rule before
@@ -133,12 +143,27 @@ export async function runDurableOrchestrator({
         goal, planFile: planFile === null ? null : path.resolve(planFile),
         status: "READY", started: false, inFlight: false,
         cycles: 0, nextRunAt: null, lastStage: "NEW", lastError: null,
+        budget:makeGoalBudget(configuredBudget),
       };
       await persist(file, state);
     }
 
+    if(!state.budget){
+      // Existing checkpoints must retain already consumed work; do not
+      // restart accumulated counts at zero after a version upgrade.
+      const charged=state.cycles+(state.inFlight?1:0);
+      state.budget=makeGoalBudget(configuredBudget,charged,sliceMs);
+      await persist(file,state);
+    } else if(budgetLimits!==null
+      &&JSON.stringify(state.budget.limits)!==JSON.stringify(configuredBudget)){
+      throw failure("ORCHESTRATOR_BUDGET_IMMUTABLE",
+        "A goal budget cannot be replaced by different limits on resume.");
+    }
     if (STOPPED.has(state.status)) return structuredClone(state);
     if (state.inFlight) {
+      // A crash cannot leave a budget execution slot occupied forever.
+      // The full pre-crash reservation remains charged.
+      recoverOrphanedBudget(state.budget);
       // A crash may occur after a Supervisor submit but before the scheduler
       // recorded its result. Only the existing durable execution or planner
       // checkpoint makes a bare resume permissible.
@@ -160,6 +185,12 @@ export async function runDurableOrchestrator({
     let used = 0;
     while (used < maxCycles && now() < until) {
       if (STOPPED.has(state.status)) break;
+      if(signal?.aborted){
+        state={...state,status:"PAUSED",inFlight:false,
+          nextRunAt:null,lastError:"CANCELLED"};
+        await persist(file,state);
+        break;
+      }
       // Timer wake-ups can occur a millisecond early. Keep sleeping until
       // the due timestamp, without submitting another Worker or busy-spinning.
       while (state.nextRunAt !== null && now() < state.nextRunAt
@@ -169,27 +200,48 @@ export async function runDurableOrchestrator({
         await sleep(Math.max(1, remaining));
       }
       if (now() >= until) break;
+      if(signal?.aborted){
+        state={...state,status:"PAUSED",inFlight:false,
+          nextRunAt:null,lastError:"CANCELLED"};
+        await persist(file,state);
+        break;
+      }
+      const allowance=budgetAllowance(state.budget,
+        Math.min(sliceMs,Math.max(0,until-now())));
+      if(!allowance){
+        state={...state,status:"PAUSED",inFlight:false,
+          nextRunAt:null,lastError:"GOAL_BUDGET_EXHAUSTED"};
+        await persist(file,state);
+        try{onState(structuredClone(state));}catch{/* observer-only */}
+        break;
+      }
       const action = state.started ? "resume" : state.initialAction;
+      reserveGoalBudget(state.budget,allowance);
       state = { ...state, status: "RUNNING", inFlight: true,
         nextRunAt: null, lastError: null };
       await persist(file, state);
-      onState(structuredClone(state));
+      try{onState(structuredClone(state));}catch{/* observer-only */}
+      const begun=Date.now();
       let result;
       try {
         result = await runSlice({
           action, stateFile: checkpoint, workspaceRoot: root,
           goal: action === "goal" ? state.goal : null,
           planFile: action === "start" ? state.planFile : null,
-          timeoutMs: Math.max(10, Math.min(sliceMs, until - now())),
+          timeoutMs: allowance,signal,
         });
       } catch (error) {
+        settleGoalBudget(state.budget,Date.now()-begun,{uncertain:true});
         // Outcome may be unknown even if a tool was already invoked.
-        state = { ...state, status: "UNCERTAIN",
-          lastError: typeof error?.code === "string" ? error.code : "SLICE_OUTCOME_UNKNOWN",
+        state = { ...state, status: signal?.aborted ? "PAUSED" : "UNCERTAIN",
+          inFlight:false,
+          lastError: signal?.aborted ? "CANCELLED"
+            :typeof error?.code === "string" ? error.code : "SLICE_OUTCOME_UNKNOWN",
           nextRunAt: null };
         await persist(file, state);
         return structuredClone(state);
       }
+      settleGoalBudget(state.budget,Date.now()-begun);
       const status = result?.status;
       if (typeof status !== "string") {
         state = { ...state, status: "UNCERTAIN", lastError: "INVALID_SLICE_RESULT",
@@ -207,20 +259,27 @@ export async function runDurableOrchestrator({
           || taskStatuses.some(value => ["PAUSED", "WAITING_APPROVAL"].includes(value))
           || Boolean(result.investigation?.monitor?.replanRequired)
           || Boolean(result.investigation?.monitor?.budgetExhausted);
-        const nextStatus = status === "VERIFIED" ? "COMPLETE"
+        const nextStatus = signal?.aborted ? "PAUSED"
+          :status === "VERIFIED" ? "COMPLETE"
           : status === "BLOCKED" ? "BLOCKED"
             : mustPause ? "PAUSED"
               : ["PLANNING", "PLANNED", "RUNNING", "VERIFYING"].includes(status)
                 ? "WAITING" : "UNCERTAIN";
         state = { ...state, status: nextStatus,
-          lastStage: status, lastError: nextStatus === "UNCERTAIN" ? "INVALID_SLICE_STATUS" : null,
+          lastStage: status, lastError: signal?.aborted ? "CANCELLED"
+            :nextStatus === "UNCERTAIN" ? "INVALID_SLICE_STATUS" : null,
           nextRunAt: nextStatus === "WAITING" ? now() + cooldownMs : null };
       }
       state.started = true;
       state.inFlight = false;
       state.cycles++;
+      if(state.status==="WAITING"&&!budgetAllowance(state.budget,sliceMs)){
+        state.status="PAUSED";
+        state.nextRunAt=null;
+        state.lastError="GOAL_BUDGET_EXHAUSTED";
+      }
       await persist(file, state);
-      onState(structuredClone(state));
+      try{onState(structuredClone(state));}catch{/* observer-only */}
       used++;
     }
     return structuredClone(state);
