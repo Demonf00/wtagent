@@ -4,6 +4,7 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { replaceFileAtomic } from "../shared/atomic-write.js";
 import { annotateCheckpointFailures } from "./failure-classifier.js";
+import { emptyRepairBudget, validateRepairBudget, reserveRepairAttempt, failRepairAttempt, repairStopReason } from "./repair-budget.js";
 import { executeCommandCheck, commandCheckHash } from "./command-verifier.js";
 import { makeVerificationReceipt, assertVerificationReceipt } from "./verification-receipt.js";
 import { assertSavedTestSummary } from "./test-summary.js";
@@ -203,22 +204,31 @@ async function persist(file, state) {
 }
 
 async function artifactEvidence(root, check) {
-  let candidate = root;
-  for (const segment of check.path.split("/")) {
-    candidate = path.join(candidate, segment);
-    const stat = await fs.lstat(candidate);
-    if (stat.isSymbolicLink()) throw invalid("Symlinked artifact paths are forbidden.", "ARTIFACT_UNSAFE");
+  try {
+    let candidate = root;
+    for (const segment of check.path.split("/")) {
+      candidate = path.join(candidate, segment);
+      const stat = await fs.lstat(candidate);
+      if (stat.isSymbolicLink()) throw invalid("Symlinked artifact paths are forbidden.", "ARTIFACT_UNSAFE");
+    }
+    const stat = await fs.stat(candidate);
+    if (!stat.isFile() || stat.size < check.minBytes || stat.size > 100_000_000) {
+      throw invalid(`Artifact size or type failed: ${check.path}`, "ARTIFACT_INVALID");
+    }
+    const bytes = await fs.readFile(candidate);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    if (check.sha256 && sha256 !== check.sha256) {
+      throw invalid(`Artifact hash mismatch: ${check.path}`, "ARTIFACT_MISMATCH");
+    }
+    return { path: check.path, sha256, bytes: bytes.length };
+  } catch (error) {
+    // Only a missing artifact within the verification path is repairable.
+    // Do not reinterpret permission, symlink or unrelated filesystem errors.
+    if (error?.code === "ENOENT") {
+      throw invalid("Required verification artifact is missing.", "ARTIFACT_MISSING");
+    }
+    throw error;
   }
-  const stat = await fs.stat(candidate);
-  if (!stat.isFile() || stat.size < check.minBytes || stat.size > 100_000_000) {
-    throw invalid(`Artifact size or type failed: ${check.path}`, "ARTIFACT_INVALID");
-  }
-  const bytes = await fs.readFile(candidate);
-  const sha256 = createHash("sha256").update(bytes).digest("hex");
-  if (check.sha256 && sha256 !== check.sha256) {
-    throw invalid(`Artifact hash mismatch: ${check.path}`, "ARTIFACT_MISMATCH");
-  }
-  return { path: check.path, sha256, bytes: bytes.length };
 }
 
 async function captureBaseline(root, task) {
@@ -371,6 +381,7 @@ export class TaskCoordinator {
     const state = {
       schema: 2, planId, workspaceRoot: root, workspaceId,
       goal: checked.goal, status: "RUNNING", lastError: null,
+      repairBudget: emptyRepairBudget(),
       goalDelivery: {
         status: checked.finalAcceptance?.length ? "PENDING" : "UNVERIFIED",
         acceptance: checked.finalAcceptance ?? [],
@@ -476,6 +487,11 @@ export class TaskCoordinator {
       }
       if (delivery.status === "DELIVERED") assertGoalReceipt(state);
     }
+    try {
+      state.repairBudget = validateRepairBudget(state.repairBudget);
+    } catch {
+      throw invalid("Invalid persisted repair budget.", "STATE_UNSAFE");
+    }
     annotateCheckpointFailures(state);
     return new TaskCoordinator({ stateFile: file, workspaceRoot: root, workspaceId, supervisor, state });
   }
@@ -488,7 +504,54 @@ export class TaskCoordinator {
     return buildDeliveryReport(this.state);
   }
 
+  /**
+   * Reserve budget before any repair action. This API only records intent:
+   * it never unblocks a task, launches a Worker, or requests approval.
+   * A RESERVED attempt stays non-replayable after a crash.
+   */
+  reserveRepair({ errorCode } = {}) {
+    const action = this.mutations.catch(() => {}).then(async () => {
+      if (this.state.status !== "BLOCKED") {
+        throw invalid("Repair requires a blocked checkpoint.", "REPAIR_NOT_BLOCKED");
+      }
+      const budget = validateRepairBudget(this.state.repairBudget);
+      const previous = budget.attempts.at(-1);
+      const expectedCode = previous?.status === "FAILED"
+        ? previous.resultCode : this.state.lastError;
+      if (errorCode != null && errorCode !== expectedCode) {
+        throw invalid("Repair failure identity mismatch.", "REPAIR_DIAGNOSTIC_MISMATCH");
+      }
+      const { budget: next, attempt } = reserveRepairAttempt(budget, expectedCode);
+      this.state.repairBudget = next;
+      await this.#save();
+      return { attempt: snapshot(attempt), stopCode: repairStopReason(next) };
+    });
+    this.mutations = action;
+    return action;
+  }
+
+  /**
+   * Record an independently observed failure. This never retries it.
+   * Permission and Supervisor state remain unchanged.
+   */
+  recordRepairFailure({ sequence, errorCode }) {
+    const action = this.mutations.catch(() => {}).then(async () => {
+      if (this.state.status !== "BLOCKED") {
+        throw invalid("Repair requires a blocked checkpoint.", "REPAIR_NOT_BLOCKED");
+      }
+      const { budget, stopCode } = failRepairAttempt(this.state.repairBudget, {
+        sequence, errorCode,
+      });
+      this.state.repairBudget = budget;
+      await this.#save();
+      return { stopCode, budget: snapshot(budget) };
+    });
+    this.mutations = action;
+    return action;
+  }
+
   async #save() {
+    this.state.repairBudget = validateRepairBudget(this.state.repairBudget);
     annotateCheckpointFailures(this.state);
     await persist(this.stateFile, this.state);
   }
