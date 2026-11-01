@@ -12,6 +12,7 @@ import {
   recoveryOptions, retryDelay, inspectCheckpoint, incidentSummary,
   safeRuntimeEvent,
 } from "./recovery-controller.js";
+import { safeLiveEvent } from "./live-display.js";
 
 const STATES = new Set([
   "queued", "running", "recovering", "waiting_retry", "blocked_uncertain",
@@ -84,6 +85,7 @@ export class TaskSupervisor {
     options = {},
     execute = executeConversationTurn,
     adapterFactory = null,
+    onDisplay = null,
     autoRun = true,
   }) {
     if (!dataDir || !sessionsDir) throw fail("Supervisor requires dataDir and sessionsDir.");
@@ -100,6 +102,7 @@ export class TaskSupervisor {
     this.fatalError = null;
     this.execute = execute;
     this.adapterFactory = adapterFactory;
+    this.onDisplay = onDisplay;
     // Production work executes in a separate OS process. Injected runners
     // preserve the previous in-process test/extension contract.
     this.useWorkerProcess = execute === executeConversationTurn && !adapterFactory;
@@ -522,12 +525,19 @@ async create({ workspaceId, instruction, provider = DEFAULT_PROVIDER, idempotenc
         }));
         return;
       }
+      const onDisplay = (event) => {
+        if (this.current?.taskId !== record.taskId) return;
+        const display = safeLiveEvent(event);
+        if (!display) return;
+        try { this.onDisplay?.(display); } catch { /* Console failures cannot fail tasks */ }
+      };
       const onEvent = async (event) => {
         if (this.current?.taskId === record.taskId) {
           this.current.lastProgressAt = Date.now();
         }
         // Do not persist arbitrary model/browser text, tool arguments or
         // screenshots into Supervisor diagnostics.
+        if (!this.useWorkerProcess) onDisplay(event);
         if (event?.type === "model.streaming") return;
         const sanitized = safeRuntimeEvent(event);
         await this.#mutate(async () => {
@@ -548,7 +558,7 @@ async create({ workspaceId, instruction, provider = DEFAULT_PROVIDER, idempotenc
           options: this.options,
           taskRole: record.taskRole ?? "executor",
           settings: this.recoverySettings,
-          control, approvalProvider, onEvent,
+          control, approvalProvider, onEvent, onDisplay,
           isWaitingApproval: () => record.status === "waiting_approval",
           onStart: (pid) => {
             if (this.current?.taskId === record.taskId) {
