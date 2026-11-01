@@ -2,8 +2,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {stageCandidate,readUpgradeState,promoteCandidate,rollbackCandidate} from "./self-upgrade.js";
 import { Command } from "commander";
-import { confirm, select } from "@inquirer/prompts";
+import { confirm, select, input } from "@inquirer/prompts";
 import { launchNativeLoginBrowser } from "../browser/native-login.js";
 import {
   createWebAdapter,
@@ -1023,6 +1024,61 @@ autonomyCommand
       workspaceRoot:opts.project??process.cwd(),
     });
     console.log(JSON.stringify(result,null,2));
+  });
+
+
+const upgradeCommand=autonomyCommand
+  .command("upgrade")
+  .description("Audit local candidate promotion and rollback without installing");
+upgradeCommand.option("--registry <path>","Local registry outside the Git source");
+upgradeCommand.command("stage")
+  .requiredOption("--report <path>","Previously generated SU-01 verification report")
+  .description("Reverify exact candidate with trusted checks and archive both versions")
+  .action(async (_,command)=>{
+    const opts=command.optsWithGlobals();
+    console.log(JSON.stringify(await stageCandidate({
+      sourceRoot:opts.project??process.cwd(),
+      stateRoot:opts.registry??null,
+      reportPath:opts.report,
+    }),null,2));
+  });
+upgradeCommand.command("status")
+  .description("Show recorded active version, rollback target and audit history")
+  .action(async (_,command)=>{
+    const opts=command.optsWithGlobals();
+    console.log(JSON.stringify(await readUpgradeState({
+      sourceRoot:opts.project??process.cwd(),
+      stateRoot:opts.registry??null,
+    }),null,2));
+  });
+upgradeCommand.command("promote")
+  .requiredOption("--sha <full-sha>","Exact staged candidate commit SHA")
+  .description("Require an interactive full-SHA approval for recorded promotion")
+  .action(async (_,command)=>{
+    const opts=command.optsWithGlobals();
+    if(!process.stdin.isTTY||!process.stdout.isTTY)
+      throw new Error("Human approval requires an interactive terminal.");
+    console.log(JSON.stringify(await promoteCandidate({
+      sourceRoot:opts.project??process.cwd(),
+      stateRoot:opts.registry??null,sha:opts.sha,
+      approve:async({sha})=>input({
+        message:"Type the FULL candidate SHA to approve promotion: "+sha,
+      }),
+    }),null,2));
+  });
+upgradeCommand.command("rollback")
+  .description("Require interactive full-SHA approval to restore prior artifact pointer")
+  .action(async (_,command)=>{
+    const opts=command.optsWithGlobals();
+    if(!process.stdin.isTTY||!process.stdout.isTTY)
+      throw new Error("Human approval requires an interactive terminal.");
+    console.log(JSON.stringify(await rollbackCandidate({
+      sourceRoot:opts.project??process.cwd(),
+      stateRoot:opts.registry??null,
+      approve:async({sha})=>input({
+        message:"Type the FULL prior SHA to approve rollback: "+sha,
+      }),
+    }),null,2));
   });
 
 autonomyCommand
