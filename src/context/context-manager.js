@@ -108,7 +108,7 @@ export function buildContextHandoff(state, pressure) {
     previousSessionId: state.sessionId,
     projectRoot: state.projectRoot,
     provider: state.provider,
-    originalGoal: cut(state.task, 1800),
+    originalGoal: cut(state.rootContextGoal ?? state.task, 1800),
     lastConfirmedAssistantMessage: cut(state.lastMessage, 1600),
     recentUserInstructions: latestFollowups,
     completedToolRecords: Object.keys(state.completedTools ?? {}).length,
@@ -173,6 +173,11 @@ export async function prepareContextRotation({
     mode: session.state.mode,
     generationType: session.state.generationType,
   });
-  await next.update({ previousContextSessionId: session.sessionId });
+  await next.update({
+    previousContextSessionId: session.sessionId,
+    rootContextGoal: session.state.rootContextGoal ?? session.state.task,
+    contextGeneration: (Number.isSafeInteger(session.state.contextGeneration)
+      ? session.state.contextGeneration : 0) + 1,
+  });
   return { next, previous: session.sessionId, savedFile, pressure };
 }
