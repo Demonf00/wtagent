@@ -1,4 +1,3 @@
-
 {
   "schema": 1,
   "project": "Demonf00/wtagent",
@@ -12,11 +11,25 @@
     "evidence": "Seven relevant test files: 140 passed, zero failed. Not a Windows/browser soak certification."
   },
   "relationshipToLegacyPlan": "Keep docs/autonomy-tasks.json unchanged. This is the canonical implementation roadmap for the next incremental development cycle, not an automatic authorization to execute privileged actions.",
-  "statusVocabulary": ["TODO", "READY", "IN_PROGRESS", "VERIFYING", "VERIFIED", "BLOCKED"],
+  "statusVocabulary": [
+    "TODO",
+    "READY",
+    "IN_PROGRESS",
+    "VERIFYING",
+    "VERIFIED",
+    "BLOCKED"
+  ],
   "executionPolicy": {
     "oneTaskAtATime": true,
     "order": "Topological order of dependencies, then array order",
-    "advanceOnlyAfter": ["implementation", "relevant-negative-and-positive-tests", "npm run check", "npm test", "scoped-local-git-commit", "commitShaRecorded"],
+    "advanceOnlyAfter": [
+      "implementation",
+      "relevant-negative-and-positive-tests",
+      "npm run check",
+      "npm test",
+      "scoped-local-git-commit",
+      "commitShaRecorded"
+    ],
     "verification": "Evidence must come from an independent tool/verifier, never only from model prose. A file hash is not functional proof.",
     "progress": "Mark task IN_PROGRESS before editing, VERIFYING during tests; VERIFIED only after a successful scoped commit. Persist commitSha and test evidence. Do not change completed task statuses without documented remediation.",
     "recovery": "On restart inspect Git HEAD/worktree and this document. If a task was interrupted, reconcile the exact scoped commit and tests before replaying. Do not use git reset/clean, overwrite unrelated changes, or replay uncertain side effects.",
@@ -27,228 +40,645 @@
   },
   "tasks": [
     {
-      "id": "FV-01", "phase": "Functional Verification", "status": "READY", "dependsOn": [],
+      "id": "FV-01",
+      "phase": "Functional Verification",
+      "status": "VERIFIED",
+      "dependsOn": [],
       "title": "Expand acceptance schema for command checks",
-      "scope": ["src/autonomy/task-coordinator.js", "test/autonomy-coordinator.test.js"],
+      "scope": [
+        "src/autonomy/task-coordinator.js",
+        "test/autonomy-coordinator.test.js"
+      ],
       "deliverable": "Validate bounded, explicit command acceptance entries while preserving legacy file-only plans.",
-      "acceptance": ["Reject arbitrary programs, invalid argv/cwd, and shell injection", "File-only plans remain valid", "Schema unit tests include positive and negative cases"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "Reject arbitrary programs, invalid argv/cwd, and shell injection",
+        "File-only plans remain valid",
+        "Schema unit tests include positive and negative cases"
+      ],
+      "commitSha": "569170c9f209cdb56f49f05e31dea0a28ab68c67",
+      "testEvidence": {
+        "syntax": "156 files OK",
+        "specialized": {
+          "passed": 17,
+          "failed": 0,
+          "skipped": 0
+        },
+        "full": {
+          "tests": 839,
+          "passed": 826,
+          "failed": 0,
+          "skipped": 13
+        },
+        "windowsLiveBrowser": "NOT_RUN"
+      },
+      "notes": "Command checks accepted as declarations only; no execution until FV-02, fail-closed on create/load."
     },
     {
-      "id": "FV-02", "phase": "Functional Verification", "status": "TODO", "dependsOn": ["FV-01"],
+      "id": "FV-02",
+      "phase": "Functional Verification",
+      "status": "IN_PROGRESS",
+      "dependsOn": [
+        "FV-01"
+      ],
       "title": "Execute independent bounded command checks",
-      "scope": ["src/autonomy", "test/autonomy-coordinator.test.js"],
+      "scope": [
+        "src/autonomy",
+        "test/autonomy-coordinator.test.js"
+      ],
       "deliverable": "Run allowlisted verification commands separately from the Worker under explicit execution boundaries.",
-      "acceptance": ["Record true exit status, timeout, stderr and spawn errors", "No shell execution, path escape or arbitrary code elevation", "Failure never yields VERIFIED"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "Record true exit status, timeout, stderr and spawn errors",
+        "No shell execution, path escape or arbitrary code elevation",
+        "Failure never yields VERIFIED"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "FV-03", "phase": "Functional Verification", "status": "TODO", "dependsOn": ["FV-02"],
+      "id": "FV-03",
+      "phase": "Functional Verification",
+      "status": "TODO",
+      "dependsOn": [
+        "FV-02"
+      ],
       "title": "Persist and bind verification evidence",
-      "scope": ["src/autonomy/task-coordinator.js", "test/autonomy-coordinator.test.js"],
+      "scope": [
+        "src/autonomy/task-coordinator.js",
+        "test/autonomy-coordinator.test.js"
+      ],
       "deliverable": "Persist verification command, environment identity, result and artifact fingerprints atomically.",
-      "acceptance": ["Evidence is versioned and tied to workspace/plan/task", "Missing or tampered evidence fails closed", "Verified tasks keep reproducible evidence"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "Evidence is versioned and tied to workspace/plan/task",
+        "Missing or tampered evidence fails closed",
+        "Verified tasks keep reproducible evidence"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "FV-04", "phase": "Functional Verification", "status": "TODO", "dependsOn": ["FV-03"],
+      "id": "FV-04",
+      "phase": "Functional Verification",
+      "status": "TODO",
+      "dependsOn": [
+        "FV-03"
+      ],
       "title": "Verify completed tasks during resume",
-      "scope": ["src/autonomy/task-coordinator.js", "test/autonomy-coordinator.test.js"],
+      "scope": [
+        "src/autonomy/task-coordinator.js",
+        "test/autonomy-coordinator.test.js"
+      ],
       "deliverable": "Resume validates persisted evidence and detects relevant source/verification drift without repeating side effects.",
-      "acceptance": ["Evidence drift blocks success", "Idempotent resume never duplicates Worker operations", "Interrupted verification retries only safe checks"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "Evidence drift blocks success",
+        "Idempotent resume never duplicates Worker operations",
+        "Interrupted verification retries only safe checks"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "FV-05", "phase": "Functional Verification", "status": "TODO", "dependsOn": ["FV-04"],
+      "id": "FV-05",
+      "phase": "Functional Verification",
+      "status": "TODO",
+      "dependsOn": [
+        "FV-04"
+      ],
       "title": "Add test and integration acceptance",
-      "scope": ["src/autonomy", "test"],
+      "scope": [
+        "src/autonomy",
+        "test"
+      ],
       "deliverable": "Add test-suite and repeatable localhost integration verification with structured results.",
-      "acceptance": ["Failed/zero/skipped required tests do not pass", "Integration verifies observable output not a model claim", "Run in restricted verifier process"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "Failed/zero/skipped required tests do not pass",
+        "Integration verifies observable output not a model claim",
+        "Run in restricted verifier process"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "FV-06", "phase": "Functional Verification", "status": "TODO", "dependsOn": ["FV-05"],
+      "id": "FV-06",
+      "phase": "Functional Verification",
+      "status": "TODO",
+      "dependsOn": [
+        "FV-05"
+      ],
       "title": "Gate whole-goal completion on final verification",
-      "scope": ["src/autonomy", "test/autonomy-supervisor-integration.test.js"],
+      "scope": [
+        "src/autonomy",
+        "test/autonomy-supervisor-integration.test.js"
+      ],
       "deliverable": "Distinguish artifact verified, task verified, and goal delivered.",
-      "acceptance": ["A modified file with failing behavior cannot succeed", "All required checks must be evidenced", "Deliverable report identifies any unverified capability"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "A modified file with failing behavior cannot succeed",
+        "All required checks must be evidenced",
+        "Deliverable report identifies any unverified capability"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "RR-01", "phase": "Runtime Reliability", "status": "TODO", "dependsOn": ["FV-06"],
+      "id": "RR-01",
+      "phase": "Runtime Reliability",
+      "status": "TODO",
+      "dependsOn": [
+        "FV-06"
+      ],
       "title": "Fault-inject outbound and tool-result boundaries",
-      "scope": ["src/runtime", "test/runtime.test.js"],
+      "scope": [
+        "src/runtime",
+        "test/runtime.test.js"
+      ],
       "deliverable": "Deterministic tests of uncertain send, dropped acknowledgement, duplicate callback and restart.",
-      "acceptance": ["No blind resend of commit-unknown outbound", "No duplicate side effects", "Exactly one recognized handoff identity"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "No blind resend of commit-unknown outbound",
+        "No duplicate side effects",
+        "Exactly one recognized handoff identity"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "RR-02", "phase": "Runtime Reliability", "status": "TODO", "dependsOn": ["RR-01"],
+      "id": "RR-02",
+      "phase": "Runtime Reliability",
+      "status": "TODO",
+      "dependsOn": [
+        "RR-01"
+      ],
       "title": "Harden reconciliation diagnostics and retry policy",
-      "scope": ["src/supervisor/recovery-controller.js", "src/runtime", "test/supervisor-recovery.test.js"],
+      "scope": [
+        "src/supervisor/recovery-controller.js",
+        "src/runtime",
+        "test/supervisor-recovery.test.js"
+      ],
       "deliverable": "Classified, bounded reconcile/retry/block decisions with sanitized diagnostics.",
-      "acceptance": ["Proven not-submitted messages retry safely", "Uncertain commits remain blocked", "All attempts and stop reasons persist"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "Proven not-submitted messages retry safely",
+        "Uncertain commits remain blocked",
+        "All attempts and stop reasons persist"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "RR-03", "phase": "Runtime Reliability", "status": "TODO", "dependsOn": ["RR-02"],
+      "id": "RR-03",
+      "phase": "Runtime Reliability",
+      "status": "TODO",
+      "dependsOn": [
+        "RR-02"
+      ],
       "title": "Reproducible Windows worker soak harness",
-      "scope": ["scripts", "test"],
+      "scope": [
+        "scripts",
+        "test"
+      ],
       "deliverable": "Bounded repeatable 50+ tool-cycle test with worker crash and transport failures.",
-      "acceptance": ["Produces sanitized structured report", "No duplicated side effects on replay", "Separately labels mocked test evidence versus live browser smoke"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "Produces sanitized structured report",
+        "No duplicated side effects on replay",
+        "Separately labels mocked test evidence versus live browser smoke"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "FR-01", "phase": "Failure Resolution", "status": "TODO", "dependsOn": ["RR-03"],
+      "id": "FR-01",
+      "phase": "Failure Resolution",
+      "status": "TODO",
+      "dependsOn": [
+        "RR-03"
+      ],
       "title": "Introduce explicit failure classification",
-      "scope": ["src/autonomy", "test"],
+      "scope": [
+        "src/autonomy",
+        "test"
+      ],
       "deliverable": "Separate retryable, verification failure, external blocker, uncertain side effect and permanent failure.",
-      "acceptance": ["Fail-closed default", "Stable diagnostic codes", "Existing BLOCKED checkpoints still load"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "Fail-closed default",
+        "Stable diagnostic codes",
+        "Existing BLOCKED checkpoints still load"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "FR-02", "phase": "Failure Resolution", "status": "TODO", "dependsOn": ["FR-01"],
+      "id": "FR-02",
+      "phase": "Failure Resolution",
+      "status": "TODO",
+      "dependsOn": [
+        "FR-01"
+      ],
       "title": "Bound autonomous repair attempts",
-      "scope": ["src/autonomy", "test"],
+      "scope": [
+        "src/autonomy",
+        "test"
+      ],
       "deliverable": "Durable attempt budgets and same-error loop detection.",
-      "acceptance": ["Repeated identical failures stop", "Restart does not reset budget", "No approval escalation by retries"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "Repeated identical failures stop",
+        "Restart does not reset budget",
+        "No approval escalation by retries"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "FR-03", "phase": "Failure Resolution", "status": "TODO", "dependsOn": ["FR-02"],
+      "id": "FR-03",
+      "phase": "Failure Resolution",
+      "status": "TODO",
+      "dependsOn": [
+        "FR-02"
+      ],
       "title": "Generate constrained repair subtasks",
-      "scope": ["src/autonomy", "test"],
+      "scope": [
+        "src/autonomy",
+        "test"
+      ],
       "deliverable": "Convert safe, evidenced failures into bounded repair tasks without altering completed checks.",
-      "acceptance": ["Repair instruction cites actual failure evidence", "No fabricated artifact success", "Uncertain side effects never auto-repair by replay"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "Repair instruction cites actual failure evidence",
+        "No fabricated artifact success",
+        "Uncertain side effects never auto-repair by replay"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "FR-04", "phase": "Failure Resolution", "status": "TODO", "dependsOn": ["FR-03"],
+      "id": "FR-04",
+      "phase": "Failure Resolution",
+      "status": "TODO",
+      "dependsOn": [
+        "FR-03"
+      ],
       "title": "Repair, reverify, and resume original task",
-      "scope": ["src/autonomy/task-coordinator.js", "src/cli/autonomy-command.js", "test"],
+      "scope": [
+        "src/autonomy/task-coordinator.js",
+        "src/cli/autonomy-command.js",
+        "test"
+      ],
       "deliverable": "Close the failure-resolution loop using durable checkpoints.",
-      "acceptance": ["Safe repair passes independent verification before advancing", "Exhausted repair remains BLOCKED", "Restart midway does not duplicate side effects"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "Safe repair passes independent verification before advancing",
+        "Exhausted repair remains BLOCKED",
+        "Restart midway does not duplicate side effects"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "DP-01", "phase": "Dynamic Planning", "status": "TODO", "dependsOn": ["FR-04"],
+      "id": "DP-01",
+      "phase": "Dynamic Planning",
+      "status": "TODO",
+      "dependsOn": [
+        "FR-04"
+      ],
       "title": "Support revisioned task DAG changes",
-      "scope": ["src/autonomy", "test"],
+      "scope": [
+        "src/autonomy",
+        "test"
+      ],
       "deliverable": "Permit bounded replanning of incomplete nodes with immutable verified evidence.",
-      "acceptance": ["Dependencies stay acyclic", "Already verified tasks remain immutable", "Concurrent plan revision conflicts are detected"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "Dependencies stay acyclic",
+        "Already verified tasks remain immutable",
+        "Concurrent plan revision conflicts are detected"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "DP-02", "phase": "Dynamic Planning", "status": "TODO", "dependsOn": ["DP-01"],
+      "id": "DP-02",
+      "phase": "Dynamic Planning",
+      "status": "TODO",
+      "dependsOn": [
+        "DP-01"
+      ],
       "title": "Detect investigation-only stalls",
-      "scope": ["src/autonomy", "src/supervisor", "test"],
+      "scope": [
+        "src/autonomy",
+        "src/supervisor",
+        "test"
+      ],
       "deliverable": "Use observed tool events and deliverables to detect repeated non-progress.",
-      "acceptance": ["Bound repeated read-only exploration", "Ignore legitimate long-running verification", "Trigger limited replan without falsely marking done"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "Bound repeated read-only exploration",
+        "Ignore legitimate long-running verification",
+        "Trigger limited replan without falsely marking done"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "DP-03", "phase": "Dynamic Planning", "status": "TODO", "dependsOn": ["DP-02"],
+      "id": "DP-03",
+      "phase": "Dynamic Planning",
+      "status": "TODO",
+      "dependsOn": [
+        "DP-02"
+      ],
       "title": "Execute revised plan and preserve progress",
-      "scope": ["src/autonomy", "test"],
+      "scope": [
+        "src/autonomy",
+        "test"
+      ],
       "deliverable": "Continue revised plan after crashes with only remaining work.",
-      "acceptance": ["Three or more dependent tasks complete in order", "Process restart retains VERIFIED tasks", "No duplicated commit or side-effect operation"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "Three or more dependent tasks complete in order",
+        "Process restart retains VERIFIED tasks",
+        "No duplicated commit or side-effect operation"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "CM-01", "phase": "Context Management", "status": "TODO", "dependsOn": ["DP-03"],
+      "id": "CM-01",
+      "phase": "Context Management",
+      "status": "TODO",
+      "dependsOn": [
+        "DP-03"
+      ],
       "title": "Produce canonical context manifest",
-      "scope": ["src/context", "test/context-management.test.js"],
+      "scope": [
+        "src/context",
+        "test/context-management.test.js"
+      ],
       "deliverable": "Bind goal/plan/task IDs, verified evidence, source SHA, hazards and next action into a bounded handoff.",
-      "acceptance": ["State comes from checkpoints not model summaries", "No credentials or raw private logs", "Missing canonical state cannot be invented"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "State comes from checkpoints not model summaries",
+        "No credentials or raw private logs",
+        "Missing canonical state cannot be invented"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "CM-02", "phase": "Context Management", "status": "TODO", "dependsOn": ["CM-01"],
+      "id": "CM-02",
+      "phase": "Context Management",
+      "status": "TODO",
+      "dependsOn": [
+        "CM-01"
+      ],
       "title": "Automatically rotate only at clean checkpoints",
-      "scope": ["src/context", "src/supervisor", "test"],
+      "scope": [
+        "src/context",
+        "src/supervisor",
+        "test"
+      ],
       "deliverable": "Context pressure requests a safe fresh conversation when all pending operations settle.",
-      "acceptance": ["No rotation with pending outbound/tool result/side effect", "No mutation of existing browser identity", "Blocked rotation safely pauses rather than losing work"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "No rotation with pending outbound/tool result/side effect",
+        "No mutation of existing browser identity",
+        "Blocked rotation safely pauses rather than losing work"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "CM-03", "phase": "Context Management", "status": "TODO", "dependsOn": ["CM-02"],
+      "id": "CM-03",
+      "phase": "Context Management",
+      "status": "TODO",
+      "dependsOn": [
+        "CM-02"
+      ],
       "title": "Resume planned work after conversation rotation",
-      "scope": ["src/context", "src/autonomy", "test"],
+      "scope": [
+        "src/context",
+        "src/autonomy",
+        "test"
+      ],
       "deliverable": "Verify manifest and resume the correct task in a new conversation.",
-      "acceptance": ["No repeat of verified work", "No re-execution of uncertain side effects", "Cross-conversation multi-task fixture passes"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "No repeat of verified work",
+        "No re-execution of uncertain side effects",
+        "Cross-conversation multi-task fixture passes"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "AS-01", "phase": "Autonomy Service", "status": "TODO", "dependsOn": ["CM-03"],
+      "id": "AS-01",
+      "phase": "Autonomy Service",
+      "status": "TODO",
+      "dependsOn": [
+        "CM-03"
+      ],
       "title": "Durable orchestrator loop",
-      "scope": ["src/autonomy", "src/cli", "test"],
+      "scope": [
+        "src/autonomy",
+        "src/cli",
+        "test"
+      ],
       "deliverable": "Dedicated bounded scheduler over goal/planner/executor/verifier rather than a single CLI timebox.",
-      "acceptance": ["Single owner per goal", "No busy-loop on paused/blocked states", "Exit and reschedule preserve checkpoints"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "Single owner per goal",
+        "No busy-loop on paused/blocked states",
+        "Exit and reschedule preserve checkpoints"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "AS-02", "phase": "Autonomy Service", "status": "TODO", "dependsOn": ["AS-01"],
+      "id": "AS-02",
+      "phase": "Autonomy Service",
+      "status": "TODO",
+      "dependsOn": [
+        "AS-01"
+      ],
       "title": "Restart recovery and process ownership",
-      "scope": ["src/autonomy", "src/supervisor", "test"],
+      "scope": [
+        "src/autonomy",
+        "src/supervisor",
+        "test"
+      ],
       "deliverable": "Recover safe tasks after service crash and prevent duplicate active schedulers.",
-      "acceptance": ["Cross-process locking is safe", "Stale-owner recovery is explicit and audited", "No accidental duplicate Worker"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "Cross-process locking is safe",
+        "Stale-owner recovery is explicit and audited",
+        "No accidental duplicate Worker"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "AS-03", "phase": "Autonomy Service", "status": "TODO", "dependsOn": ["AS-02"],
+      "id": "AS-03",
+      "phase": "Autonomy Service",
+      "status": "TODO",
+      "dependsOn": [
+        "AS-02"
+      ],
       "title": "Heartbeats and human approval notifications",
-      "scope": ["src/supervisor", "src/cli", "test"],
+      "scope": [
+        "src/supervisor",
+        "src/cli",
+        "test"
+      ],
       "deliverable": "Expose actionable heartbeat, stalled reason and required approval without privileged auto-approval.",
-      "acceptance": ["No notification floods", "Escalation never grants permission", "Sensitive information redacted"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "No notification floods",
+        "Escalation never grants permission",
+        "Sensitive information redacted"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "OB-01", "phase": "Observability and Delivery", "status": "TODO", "dependsOn": ["AS-03"],
+      "id": "OB-01",
+      "phase": "Observability and Delivery",
+      "status": "TODO",
+      "dependsOn": [
+        "AS-03"
+      ],
       "title": "Durable progress and tool echo",
-      "scope": ["src/supervisor", "src/cli", "test"],
+      "scope": [
+        "src/supervisor",
+        "src/cli",
+        "test"
+      ],
       "deliverable": "Current goal/task/action, test status, attempt counts and next step visible from durable events.",
-      "acceptance": ["Existing live tool echo preserved", "No private model payload leakage", "Reattach after restart shows accurate state"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "Existing live tool echo preserved",
+        "No private model payload leakage",
+        "Reattach after restart shows accurate state"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "OB-02", "phase": "Observability and Delivery", "status": "TODO", "dependsOn": ["OB-01"],
+      "id": "OB-02",
+      "phase": "Observability and Delivery",
+      "status": "TODO",
+      "dependsOn": [
+        "OB-01"
+      ],
       "title": "Goal-wide resource budgets",
-      "scope": ["src/autonomy", "test"],
+      "scope": [
+        "src/autonomy",
+        "test"
+      ],
       "deliverable": "Persisted time/call/attempt/concurrency limits with safe pausing.",
-      "acceptance": ["Limits survive restart", "Exhaustion cannot be mistaken for success", "No resource leak after cancellation"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "Limits survive restart",
+        "Exhaustion cannot be mistaken for success",
+        "No resource leak after cancellation"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "OB-03", "phase": "Observability and Delivery", "status": "TODO", "dependsOn": ["OB-02"],
+      "id": "OB-03",
+      "phase": "Observability and Delivery",
+      "status": "TODO",
+      "dependsOn": [
+        "OB-02"
+      ],
       "title": "Evidence-backed final delivery report",
-      "scope": ["src/autonomy", "src/cli", "test"],
+      "scope": [
+        "src/autonomy",
+        "src/cli",
+        "test"
+      ],
       "deliverable": "Compare original goal acceptance with actual artifacts/tests, commits, limitations and approvals.",
-      "acceptance": ["Unmet requirements explicitly listed", "No status inferred from model prose", "Reproducible report from checkpoint"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "Unmet requirements explicitly listed",
+        "No status inferred from model prose",
+        "Reproducible report from checkpoint"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "SU-01", "phase": "Controlled Self-Upgrade", "status": "TODO", "dependsOn": ["OB-03"],
+      "id": "SU-01",
+      "phase": "Controlled Self-Upgrade",
+      "status": "TODO",
+      "dependsOn": [
+        "OB-03"
+      ],
       "title": "Isolated candidate verification against known-good supervisor",
-      "scope": ["scripts", "src/supervisor", "test"],
+      "scope": [
+        "scripts",
+        "src/supervisor",
+        "test"
+      ],
       "deliverable": "Keep supervisor/verifier running trusted code while exercising candidate in disposable worktree.",
-      "acceptance": ["Deliberately broken candidate fails", "Known-good runtime remains intact", "Reports exact candidate SHA and skipped live checks"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "Deliberately broken candidate fails",
+        "Known-good runtime remains intact",
+        "Reports exact candidate SHA and skipped live checks"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "SU-02", "phase": "Controlled Self-Upgrade", "status": "TODO", "dependsOn": ["SU-01"],
+      "id": "SU-02",
+      "phase": "Controlled Self-Upgrade",
+      "status": "TODO",
+      "dependsOn": [
+        "SU-01"
+      ],
       "title": "Approval-gated promotion and rollback",
-      "scope": ["scripts", "src/cli", "test"],
+      "scope": [
+        "scripts",
+        "src/cli",
+        "test"
+      ],
       "deliverable": "Auditable promote/rollback procedure tied to approved version and exact verified candidate.",
-      "acceptance": ["No implicit merge/publish/global install", "Rollback points to exact prior artifact", "Explicit approval necessary for activation"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "No implicit merge/publish/global install",
+        "Rollback points to exact prior artifact",
+        "Explicit approval necessary for activation"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     },
     {
-      "id": "SU-03", "phase": "Controlled Self-Upgrade", "status": "TODO", "dependsOn": ["SU-02"],
+      "id": "SU-03",
+      "phase": "Controlled Self-Upgrade",
+      "status": "TODO",
+      "dependsOn": [
+        "SU-02"
+      ],
       "title": "Final end-to-end autonomous delivery regression",
-      "scope": ["test", "scripts", "docs"],
+      "scope": [
+        "test",
+        "scripts",
+        "docs"
+      ],
       "deliverable": "Demonstrate multistep goal, real verifier, repair, replan, rotation, restart and evidence-backed completion.",
-      "acceptance": ["Multi-step simulation exercises injected failures", "No duplicated side effects or false success", "All phases traceable to independent commits and verified evidence"],
-      "commitSha": null, "testEvidence": null, "notes": ""
+      "acceptance": [
+        "Multi-step simulation exercises injected failures",
+        "No duplicated side effects or false success",
+        "All phases traceable to independent commits and verified evidence"
+      ],
+      "commitSha": null,
+      "testEvidence": null,
+      "notes": ""
     }
   ]
 }
