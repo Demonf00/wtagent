@@ -695,7 +695,7 @@
     {
       "id": "OB-01",
       "phase": "Observability and Delivery",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "AS-03"
       ],
@@ -711,14 +711,19 @@
         "No private model payload leakage",
         "Reattach after restart shows accurate state"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "75fac8975dc1fbf682fd0d518e2255fea5e3216e",
+      "testEvidence": {
+        "syntax": "npm run check: Syntax OK, 194 files",
+        "fullSuite": "npm test: 987 total, 974 passed, 0 failed, 13 skipped",
+        "focused": "10 autonomy CLI and OB-01 tests passed; real Supervisor execution, CLI reattach in a new process, persistent categories, live tool echo and private payload redaction",
+        "diff": "git diff --check and git diff --cached --check passed"
+      },
+      "notes": "Added safe read-only autonomy progress CLI, durable goal/task/action-category/attempt/verification projection, and restored transient live tool echo. Reattachment does not rerun Worker or persist raw tool names, model text, tool arguments, or results."
     },
     {
       "id": "OB-02",
       "phase": "Observability and Delivery",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "OB-01"
       ],
