@@ -1,10 +1,10 @@
+import { inspectSessionContext } from "../context/context-manager.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { AgentSession } from "../session/agent-session.js";
 import { TaskSupervisor } from "../supervisor/task-supervisor.js";
 import { isProcessAlive } from "../browser/cdp-state.js";
 import { ApprovalStore } from "../policy/approval-store.js";
-import { inspectSessionContext } from "../context/context-manager.js";
 import { promptForSelect, ShellChatInput } from "./prompt-input.js";
 
 const TERMINAL = new Set(["completed", "cancelled", "paused", "blocked_uncertain", "failed"]);
