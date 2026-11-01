@@ -219,7 +219,7 @@
     {
       "id": "FV-06",
       "phase": "Functional Verification",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "FV-05"
       ],
@@ -234,14 +234,27 @@
         "All required checks must be evidenced",
         "Deliverable report identifies any unverified capability"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "73806a5d1df165fb43aab8eb05271a2d585ea386",
+      "testEvidence": {
+        "syntax": "168 files OK",
+        "specialized": {
+          "fv06": 8,
+          "cli": 4,
+          "failed": 0
+        },
+        "full": {
+          "tests": 874,
+          "passed": 861,
+          "failed": 0,
+          "skipped": 13
+        }
+      },
+      "notes": "Independent final test/integration checks gate goal delivery; receipts bind final evidence to task receipts; recovery revalidates without replay; drift revokes delivery; CLI distinguishes task VERIFIED from goal DELIVERED and UNVERIFIED."
     },
     {
       "id": "RR-01",
       "phase": "Runtime Reliability",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "FV-06"
       ],
