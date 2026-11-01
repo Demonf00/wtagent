@@ -29,6 +29,7 @@ import {
 } from "../platform/windows-diagnostics.js";
 import { ConversationRunner, resolveRuntimePaths } from "../runtime/conversation-runner.js";
 import { executeSupervisorSession } from "./supervisor-session.js";
+import { inspectSessionContext, prepareContextRotation } from "../context/context-manager.js";
 import { runAutonomyCommand } from "./autonomy-command.js";
 import { AgentSession } from "../session/agent-session.js";
 import { PolicyEngine } from "../policy/policy-engine.js";
@@ -847,6 +848,44 @@ program
   .argument("[session-id]", t("argument.sessionId"))
   .action(async (sessionId, _, command) => {
     await runStatus(sessionId, command.optsWithGlobals());
+  });
+
+const contextCommand = program
+  .command("context")
+  .description("Inspect long-session context pressure or safely rotate to a fresh conversation");
+
+contextCommand
+  .command("status")
+  .argument("<session-id>", "Saved session to inspect")
+  .action(async (sessionId, _, command) => {
+    const options = command.optsWithGlobals();
+    const paths = resolveRuntimePaths(options);
+    const session = await loadSession(paths, sessionId);
+    const pressure = await inspectSessionContext(session);
+    console.log(JSON.stringify({
+      sessionId, ...pressure,
+      recommendation: pressure.warning && pressure.rotationAllowed
+        ? "context rotate " + sessionId : null,
+    }, null, 2));
+  });
+
+contextCommand
+  .command("rotate")
+  .description("Start a NEW session from a bounded checkpoint; never mutate old browser identity")
+  .argument("<session-id>", "Completed, clean session")
+  .action(async (sessionId, _, command) => {
+    assertNativeRuntimeSupported();
+    const options = command.optsWithGlobals();
+    const paths = resolveRuntimePaths(options);
+    const oldSession = await loadSession(paths, sessionId);
+    const { next, savedFile } = await prepareContextRotation({
+      session: oldSession, sessionsDir: path.dirname(oldSession.directory),
+    });
+    console.log("[Context] Created new session " + next.sessionId
+      + " from completed session " + sessionId);
+    console.log("[Context] Local handoff checkpoint: " + savedFile);
+    console.log("[Context] The old Session remains unchanged. The model must inspect actual project state.");
+    return await executeSelectedSession({ session: next, options, files: [], resume: false });
   });
 
 const autonomyCommand = program
