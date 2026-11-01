@@ -3918,3 +3918,129 @@ for (const scenario of ["policy-denied", "approval-denied"]) {
     await assert.rejects(fs.stat(path.join(projectRoot, "never.txt")), { code: "ENOENT" });
   });
 }
+
+test("RR-01 lost handoff acknowledgement recovers one durable identity without resend", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "wtagent-rr01-ack-"));
+  const projectRoot = path.join(base, "project");
+  const sessionsDir = path.join(base, "sessions");
+  await fs.mkdir(projectRoot);
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+
+  const session = await TaskSession.create({
+    sessionsDir, task: "Resume lost handoff receipt safely", projectRoot, mode: null,
+  });
+  const originalCommit = session.commitPendingOutboundHandoff.bind(session);
+  let commits = 0;
+  let capturedCommitArgs;
+  session.commitPendingOutboundHandoff = async (args) => {
+    capturedCommitArgs = args;
+    const handoff = await originalCommit(args);
+    commits++;
+    if (commits === 1) throw new Error("injected lost handoff acknowledgement");
+    return handoff;
+  };
+  const firstAdapter = new FakeWebModelAdapter([]);
+  await assert.rejects(
+    runtimeForResume(session, firstAdapter).run(),
+    /injected lost handoff acknowledgement/,
+  );
+  assert.equal(firstAdapter.sentMessages.length, 1);
+  const originalOutboundId = firstAdapter.sentOutboundIds[0];
+  assert.match(originalOutboundId, /^[a-f0-9-]{36}$/);
+  assert.equal(session.state.pendingOutbound, null);
+  assert.equal(session.state.pendingAssistantTurn.handoffId,
+    `outbound:${originalOutboundId}`);
+  const transcriptBeforeDuplicate = await session.readTranscript();
+  const duplicateHandoff = await originalCommit(capturedCommitArgs);
+  assert.equal(duplicateHandoff.handoffId, `outbound:${originalOutboundId}`);
+  assert.deepEqual(await session.readTranscript(), transcriptBeforeDuplicate,
+    "duplicate commit callback must not append duplicate transcript records");
+
+  const reloaded = await TaskSession.load({ sessionsDir, taskId: session.taskId });
+  const handoffBeforeResume = structuredClone(reloaded.state.pendingAssistantTurn);
+  const finalResponse = "<agent_response><done>true</done><message>Recovered once.</message></agent_response>";
+  const recoveryAdapter = new FakeWebModelAdapter([finalResponse]);
+  recoveryAdapter.conversationUrl = handoffBeforeResume.conversationUrl;
+  recoveryAdapter.targetId = handoffBeforeResume.conversationTargetId;
+  recoveryAdapter.reconciliationOutcome = fakeReconciliationOutcome(handoffBeforeResume);
+  const result = await runtimeForResume(reloaded, recoveryAdapter).run({ resume: true });
+  assert.equal(result.message, "Recovered once.");
+  assert.deepEqual(recoveryAdapter.sentMessages, [], "must never resend committed outbound");
+  assert.deepEqual(recoveryAdapter.recoveryTargetCalls, [handoffBeforeResume.conversationTargetId]);
+  assert.equal(recoveryAdapter.reconciliationCalls.length, 1);
+  const reconciliation = recoveryAdapter.reconciliationCalls[0];
+  assert.equal(reconciliation.pendingOutbound, null);
+  assert.equal(reconciliation.priorHandoff.sourceOutboundId, originalOutboundId);
+  assert.equal(reconciliation.priorHandoff.handoffId, `outbound:${originalOutboundId}`);
+  assert.equal(reconciliation.conversationTargetId,
+    handoffBeforeResume.conversationTargetId);
+  assert.equal(reloaded.state.pendingOutbound, null);
+  assert.equal(reloaded.state.pendingAssistantTurn, null);
+  assert.equal(firstAdapter.sentMessages.length, 1);
+});
+
+test("RR-01 duplicate tool proposal after dropped result acknowledgement executes fs.write once", async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "wtagent-rr01-tool-"));
+  const projectRoot = path.join(base, "project");
+  const sessionsDir = path.join(base, "sessions");
+  await fs.mkdir(projectRoot);
+  t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const toolCall = '<agent_response><done>false</done><tool_call name="fs.write"><args><path>exactly-once.txt</path><content>only once</content></args></tool_call></agent_response>';
+  class DropResultAcknowledgement extends FakeWebModelAdapter {
+    async sendMessage(message, options) {
+      if (this.sentMessages.length === 1) {
+        this.lastSendStatus = "not-submitted";
+        throw new Error("injected dropped tool-result acknowledgement");
+      }
+      return await super.sendMessage(message, options);
+    }
+  }
+  const registry = createDefaultToolRegistry();
+  const originalExecute = registry.execute.bind(registry);
+  let writes = 0;
+  registry.execute = async (...args) => {
+    if (args[0]?.name === "fs.write") writes++;
+    return await originalExecute(...args);
+  };
+  const session = await TaskSession.create({
+    sessionsDir, task: "Do not execute duplicate tool callbacks", projectRoot, mode: null,
+  });
+  const firstAdapter = new DropResultAcknowledgement([toolCall]);
+  const firstRuntime = new AgentRuntime({
+    adapter: firstAdapter, registry, policy: new PolicyEngine(),
+    session, approval: async () => false,
+  });
+  await assert.rejects(firstRuntime.run(), /injected dropped tool-result acknowledgement/);
+  assert.equal(writes, 1);
+  assert.equal(await fs.readFile(path.join(projectRoot, "exactly-once.txt"), "utf8"),
+    "only once");
+  assert.equal(session.state.pendingToolResult?.name, "fs.write");
+  assert.equal(Object.values(session.state.sideEffectTools).length, 1);
+
+  const restored = await TaskSession.load({ sessionsDir, taskId: session.taskId });
+  const recoveredAdapter = new FakeWebModelAdapter([
+    toolCall,
+    '<agent_response><done>true</done><message>Duplicate safely ignored.</message></agent_response>',
+  ]);
+  recoveredAdapter.reconciliationOutcome = fakeReconciliationOutcome(
+    restored.state.pendingAssistantTurn,
+  );
+  const events = [];
+  const recoveredRuntime = new AgentRuntime({
+    adapter: recoveredAdapter, registry, policy: new PolicyEngine(),
+    session: restored, approval: async () => false,
+    onEvent: event => events.push(event),
+  });
+  const result = await recoveredRuntime.run({ resume: true });
+  assert.equal(result.message, "Duplicate safely ignored.");
+  assert.equal(writes, 1, "duplicated model callback must not re-execute fs.write");
+  assert.ok(events.some(event => event.type === "tool.reused"),
+    "duplicate must be visibly acknowledged as reused");
+  assert.equal(recoveredAdapter.sentMessages.length, 2);
+  assert.match(recoveredAdapter.sentMessages[0], /<tool_result name="fs\.write"/);
+  assert.match(recoveredAdapter.sentMessages[1], /<tool_result name="fs\.write"/);
+  assert.equal(await fs.readFile(path.join(projectRoot, "exactly-once.txt"), "utf8"),
+    "only once");
+  assert.equal(restored.state.pendingToolResult, null);
+  assert.equal(Object.values(restored.state.sideEffectTools).length, 1);
+});
