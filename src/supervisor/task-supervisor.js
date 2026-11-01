@@ -56,9 +56,12 @@ async function safeRegularFile(file) {
   }
 }
 
-function requestFingerprint(workspaceId, instruction, provider) {
+function requestFingerprint(workspaceId, instruction, provider, taskRole = "executor") {
+  // Preserve legacy executor fingerprints; planner identity is distinct.
+  const identity = { workspaceId, instruction, provider };
+  if (taskRole === "planner") identity.taskRole = "planner";
   return createHash("sha256")
-    .update(JSON.stringify({ workspaceId, instruction, provider }))
+    .update(JSON.stringify(identity))
     .digest("hex");
 }
 
@@ -134,6 +137,7 @@ export class TaskSupervisor {
       await safeRegularFile(file);
       const record = JSON.parse(await fs.readFile(file, "utf8"));
       if (record.taskId !== taskId || !STATES.has(record.status)
+          || ![undefined, "executor", "planner"].includes(record.taskRole)
           || !this.workspaces.has(record.workspaceId)
           || record.workspaceRoot !== this.workspaces.get(record.workspaceId)
           || !/^[a-zA-Z0-9_-]+$/.test(record.sessionId)) {
@@ -176,7 +180,9 @@ export class TaskSupervisor {
   async getEvents(taskId, after = 0) {
     this.get(taskId);
     if (!Number.isSafeInteger(after) || after < 0) throw fail("Invalid event offset.");
-    const file = this.#eventPath(taskId);
+    // Wait for in-flight state transitions to persist their events.
+await this.mutations;
+const file = this.#eventPath(taskId);
     try {
       await safeRegularFile(file);
       const source = await fs.readFile(file, "utf8");
@@ -356,7 +362,7 @@ return serializable(record);
 });
 }
 
-async create({ workspaceId, instruction, provider = DEFAULT_PROVIDER, idempotencyKey = null }) {
+async create({ workspaceId, instruction, provider = DEFAULT_PROVIDER, idempotencyKey = null, taskRole = "executor" }) {
     if (!this.initialized || this.closed) throw fail("Supervisor is not active.");
     if (!WORKSPACE_ID.test(workspaceId ?? "") || !this.workspaces.has(workspaceId)) {
       throw fail("Unknown configured workspace.");
@@ -369,8 +375,11 @@ async create({ workspaceId, instruction, provider = DEFAULT_PROVIDER, idempotenc
         || !idempotencyKey.trim() || idempotencyKey.length > ID_KEY_MAX)) {
       throw fail("Invalid idempotency key.");
     }
+    if (!["executor", "planner"].includes(taskRole)) {
+      throw fail("Invalid Supervisor task role.");
+    }
     const providerId = resolveProvider(provider).id;
-    const fingerprint = requestFingerprint(workspaceId, instruction, providerId);
+    const fingerprint = requestFingerprint(workspaceId, instruction, providerId, taskRole);
     return this.#mutate(async () => {
       if (idempotencyKey != null) {
         const match = [...this.tasks.values()].find((item) => item.idempotencyKey === idempotencyKey);
@@ -399,6 +408,7 @@ async create({ workspaceId, instruction, provider = DEFAULT_PROVIDER, idempotenc
         createdAt: time,
         updatedAt: time,
         idempotencyKey,
+        taskRole,
         requestFingerprint: fingerprint,
         pendingApproval: null,
         result: null,
@@ -536,6 +546,7 @@ async create({ workspaceId, instruction, provider = DEFAULT_PROVIDER, idempotenc
            && Number(session.state.runCount ?? 0) > record.startRunCount
            ? [] : record.files ?? [],
           options: this.options,
+          taskRole: record.taskRole ?? "executor",
           settings: this.recoverySettings,
           control, approvalProvider, onEvent,
           isWaitingApproval: () => record.status === "waiting_approval",
@@ -551,6 +562,7 @@ record.workerPid = pid;
         : await this.execute({
           session,
           options: this.options,
+          taskRole: record.taskRole ?? "executor",
           resume: session.state.runCount > 0,
           instruction: Number.isSafeInteger(record.startRunCount)
            && Number(session.state.runCount ?? 0) > record.startRunCount

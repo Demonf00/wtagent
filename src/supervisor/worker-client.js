@@ -30,6 +30,7 @@ export async function runWorkerProcess({
   instruction = null,
   files = [],
   options = {},
+  taskRole = "executor",
   settings,
   control,
   approvalProvider,
@@ -39,6 +40,9 @@ export async function runWorkerProcess({
   forkProcess = fork,
 }) {
   control.checkpoint();
+  if (!["executor", "planner"].includes(taskRole)) {
+    throw new Error("Invalid worker task role.");
+  }
   const child = forkProcess(new URL("./worker-main.js", import.meta.url), [], {
     cwd: workspaceRoot,
     execArgv: [],
@@ -122,7 +126,7 @@ export async function runWorkerProcess({
       lastHeartbeat = Date.now();
       started = send({
         type: "start", sessionsDir, sessionId, workspaceRoot, instruction, files, options,
-        heartbeatMs: settings.heartbeatMs,
+        taskRole, heartbeatMs: settings.heartbeatMs,
       });
       if (!started) kill("WORKER_IPC_FAILED");
       return;

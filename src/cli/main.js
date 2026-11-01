@@ -29,6 +29,7 @@ import {
 } from "../platform/windows-diagnostics.js";
 import { ConversationRunner, resolveRuntimePaths } from "../runtime/conversation-runner.js";
 import { executeSupervisorSession } from "./supervisor-session.js";
+import { runAutonomyCommand } from "./autonomy-command.js";
 import { AgentSession } from "../session/agent-session.js";
 import { PolicyEngine } from "../policy/policy-engine.js";
 import { ApprovalStore } from "../policy/approval-store.js";
@@ -846,6 +847,68 @@ program
   .argument("[session-id]", t("argument.sessionId"))
   .action(async (sessionId, _, command) => {
     await runStatus(sessionId, command.optsWithGlobals());
+  });
+
+const autonomyCommand = program
+  .command("autonomy")
+  .description("Experimental, explicitly approved structured task plans");
+
+autonomyCommand
+  .command("goal")
+  .description("Generate and execute a verified plan from one high-level goal")
+  .argument("<goal...>", "High-level goal to accomplish")
+  .requiredOption("--state <path>", "Checkpoint JSON path outside the workspace")
+  .option("--timeout-ms <milliseconds>", "Maximum planning and execution time", "120000")
+  .action(async (goalParts, _, command) => {
+    assertNativeRuntimeSupported();
+    const opts = command.optsWithGlobals();
+    const result = await runAutonomyCommand({
+      action: "goal", goal: goalParts.join(" "), stateFile: opts.state,
+      options: opts, timeoutMs: Number(opts.timeoutMs),
+    });
+    if (result.status !== "VERIFIED") process.exitCode = 1;
+  });
+
+autonomyCommand
+  .command("start")
+  .description("Execute a local task-plan JSON with durable checkpoints")
+  .argument("<plan-file>", "Reviewed task plan JSON file")
+  .requiredOption("--state <path>", "Checkpoint JSON path outside the workspace")
+  .option("--timeout-ms <milliseconds>", "Maximum execution time", "120000")
+  .action(async (planFile, _, command) => {
+    assertNativeRuntimeSupported();
+    const opts = command.optsWithGlobals();
+    const result = await runAutonomyCommand({
+      action: "start", planFile, stateFile: opts.state,
+      options: opts, timeoutMs: Number(opts.timeoutMs),
+    });
+    if (result.status !== "VERIFIED") process.exitCode = 1;
+  });
+
+autonomyCommand
+  .command("resume")
+  .description("Resume the existing autonomy checkpoint without resubmitting verified tasks")
+  .requiredOption("--state <path>", "Existing checkpoint JSON path")
+  .option("--timeout-ms <milliseconds>", "Maximum execution time", "120000")
+  .action(async (_, command) => {
+    assertNativeRuntimeSupported();
+    const opts = command.optsWithGlobals();
+    const result = await runAutonomyCommand({
+      action: "resume", stateFile: opts.state,
+      options: opts, timeoutMs: Number(opts.timeoutMs),
+    });
+    if (result.status !== "VERIFIED") process.exitCode = 1;
+  });
+
+autonomyCommand
+  .command("status")
+  .description("Show the persisted task-plan checkpoint")
+  .requiredOption("--state <path>", "Existing checkpoint JSON path")
+  .action(async (_, command) => {
+    const opts = command.optsWithGlobals();
+    await runAutonomyCommand({
+      action: "status", stateFile: opts.state, options: opts,
+    });
   });
 
 program
