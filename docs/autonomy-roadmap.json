@@ -280,7 +280,7 @@
     {
       "id": "RR-02",
       "phase": "Runtime Reliability",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "RR-01"
       ],
@@ -296,14 +296,19 @@
         "Uncertain commits remain blocked",
         "All attempts and stop reasons persist"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "91a949fc66903dde01fde6e018ae3ab854531f5a",
+      "testEvidence": {
+        "focused": "RR-02 targeted tests: 5 passed, 0 failed",
+        "full": "node --test: 883 total, 870 passed, 13 skipped, 0 failed",
+        "syntax": "node scripts/check-syntax.js: 168 files",
+        "diff": "git diff --check: pass"
+      },
+      "notes": "Persist sanitized per-attempt recovery decisions in task JSON and event log; verify bounded original-target reconciliation, mismatch blocking, restart durability and not-submitted retry with same outboundId."
     },
     {
       "id": "RR-03",
       "phase": "Runtime Reliability",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "RR-02"
       ],
