@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { TaskCoordinator, validateTaskPlan } from "../autonomy/task-coordinator.js";
+import { AgentSession } from "../session/agent-session.js";
+import { inspectPlannedWorkResumption } from "../context/planned-work-resumption.js";
 import { buildDeliveryReport } from "../autonomy/goal-delivery.js";
 import { GoalPlanner } from "../autonomy/goal-planner.js";
 import { TaskSupervisor } from "../supervisor/task-supervisor.js";
@@ -93,8 +95,15 @@ export async function runAutonomyCommand({
   action, goal = null, planFile = null, stateFile, options = {},
   output = console.log, createSupervisor = (config) => new TaskSupervisor(config),
   timeoutMs = 120000, pollMs = POLL_MS,
+  conversationSessionId = null,
 }) {
   if (!["goal", "start", "resume", "repair", "status"].includes(action)) throw fail("Invalid autonomy action.");
+  if (conversationSessionId !== null
+    && (action !== "resume" || typeof conversationSessionId !== "string"
+      || !/^[a-zA-Z0-9_-]+$/.test(conversationSessionId))) {
+    throw fail("Conversation-based recovery requires a valid Session ID and autonomy resume.",
+      "CONTEXT_PLAN_RESUME_UNSAFE");
+  }
   if (action === "goal" && (typeof goal !== "string" || !goal.trim()
       || Buffer.byteLength(goal, "utf8") > 8192)) {
     throw fail("goal requires a nonempty instruction no larger than 8 KiB.");
@@ -178,6 +187,14 @@ export async function runAutonomyCommand({
     if (action === "resume" && !hasExecution && !hasPlanner) {
       throw fail("No autonomy checkpoint exists.", "AUTONOMY_STATE_NOT_FOUND");
     }
+    if (conversationSessionId !== null && !hasExecution) {
+      throw fail("Conversation recovery requires an existing execution checkpoint.",
+        "CONTEXT_PLAN_RESUME_UNAVAILABLE");
+    }
+    const conversationSession = conversationSessionId === null ? null
+      : await AgentSession.load({
+        sessionsDir: paths.sessionsDir, sessionId: conversationSessionId,
+      });
 
     let coordinator;
     if (action === "start") {
@@ -230,11 +247,40 @@ export async function runAutonomyCommand({
     let resumeExistingPaused = action === "resume" && hasExecution;
     while (Date.now() < deadline) {
       const before = coordinator.getState();
+      if (conversationSession) {
+        const decision = await inspectPlannedWorkResumption({
+          ...params, session: conversationSession, sessionsDir: paths.sessionsDir,
+        });
+        if (decision.manifest.planId !== before.planId
+          || decision.manifest.planRevision !== before.planRevision) {
+          throw fail("Coordinator changed after canonical recovery validation.",
+            "CONTEXT_PLAN_RESUME_UNSAFE");
+        }
+        if (decision.status === "BLOCKED") {
+          output(`[Autonomy] Conversation recovery blocked: ${decision.reasons.join(", ")}; action=${decision.action}`);
+          return {
+            ...before,
+            status: "BLOCKED",
+            lastError: "CONTEXT_PLAN_RESUME_BLOCKED",
+          };
+        }
+        if (decision.status === "COMPLETE") {
+          output("[Autonomy] Conversation recovery: verified work already complete.");
+          return before;
+        }
+        if (decision.status !== "READY") {
+          throw fail("Unexpected canonical recovery decision.",
+            "CONTEXT_PLAN_RESUME_UNSAFE");
+        }
+        output(`[Autonomy] Conversation recovery: ${decision.action} ${decision.taskId}`);
+      }
       const continueRepair = before.repairExecution !== null
         || (action === "repair" && before.repairSubtask !== null);
       const state = continueRepair
         ? await coordinator.repairTick()
-        : await coordinator.tick({ resumePaused: resumeExistingPaused });
+        : await coordinator.tick({
+            resumePaused: conversationSession ? false : resumeExistingPaused,
+          });
       resumeExistingPaused = false;
       const active = state.tasks.find((task) =>
         task.status === "RUNNING" || task.status === "VERIFYING");
@@ -251,6 +297,22 @@ export async function runAutonomyCommand({
           ? "[Autonomy] Investigation replan budget exhausted; Worker pause requested. Intervention required."
           : "[Autonomy] Investigation stalled; Worker pause requested. A revised DAG is required before continuing.");
         return state;
+      }
+      if (conversationSession && state.status === "VERIFIED") {
+        // Coordinator proof of task completion is not proof that the current
+        // Git worktree is safe for cross-conversation delivery. Revalidate
+        // after the final tick, before accepting any terminal success.
+        const finalDecision = await inspectPlannedWorkResumption({
+          ...params, session: conversationSession, sessionsDir: paths.sessionsDir,
+        });
+        if (finalDecision.status !== "COMPLETE") {
+          const reasons = finalDecision.reasons ?? ["FINAL_STATE_NOT_CANONICALLY_COMPLETE"];
+          output(`[Autonomy] Conversation completion deferred: ${reasons.join(", ")}; action=${finalDecision.action}`);
+          return {
+            ...state, status: "BLOCKED",
+            lastError: "CONTEXT_PLAN_RESUME_BLOCKED",
+          };
+        }
       }
       if (state.status === "VERIFIED" || (state.status === "BLOCKED" && !state.repairExecution)) {
         output(`[Autonomy] ${state.status}${state.lastError ? ` (${state.lastError})` : ""}`);

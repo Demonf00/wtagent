@@ -11,6 +11,7 @@ import {
   MAX_CANONICAL_MANIFEST_BYTES,
 } from "../src/context/canonical-manifest.js";
 import { AgentSession } from "../src/session/agent-session.js";
+import { inspectPlannedWorkResumption, resumePlannedWorkStep } from "../src/context/planned-work-resumption.js";
 import { advanceAutomaticContextRotation } from "../src/context/automatic-rotation.js";
 import {
   contextSafety, contextPressure, buildContextHandoff,
@@ -497,4 +498,179 @@ test("CM-02 below-pressure session neither records request nor creates replaceme
   assert.equal((await fs.readdir(sessionsDir)).length,1);
   const saved=await AgentSession.load({sessionsDir,sessionId:session.sessionId});
   assert.equal(saved.state.automaticContextRotation,undefined);
+});
+
+
+async function cm03Fixture(t) {
+  const base=await canonicalFixture(t);
+  const sessionsDir=path.join(base.root,"sessions");
+  const parent=await AgentSession.create({
+    sessionsDir,projectRoot:base.workspaceRoot,task:"Original development plan",
+  });
+  const child=await AgentSession.create({
+    sessionsDir,projectRoot:base.workspaceRoot,task:"Bounded context handoff",
+  });
+  await parent.update({
+    automaticContextRotation:{
+      schema:1,status:"ROTATED",nextSessionId:child.sessionId,
+    },
+  });
+  await child.update({
+    previousContextSessionId:parent.sessionId,
+    rootContextGoal:"Original development plan",contextGeneration:1,
+  });
+  return {...base,sessionsDir,parent,child,args:{
+    session:child,sessionsDir,stateFile:base.stateFile,
+    workspaceRoot:base.workspaceRoot,workspaceId:"main",
+    supervisor:base.supervisor,
+  }};
+}
+
+test("CM-03 three-step planned work survives conversation rotation without verified task replay",async t=>{
+  const f=await cm03Fixture(t);
+  const expected=["one","two","three"];
+  let manifest=await buildCanonicalContextManifest(f.args);
+  for(let i=0;i<expected.length;i++){
+    const decision=await inspectPlannedWorkResumption({
+      ...f.args,previousManifest:manifest,
+    });
+    assert.equal(decision.status,"READY");
+    assert.equal(decision.action,"START_TASK");
+    assert.equal(decision.taskId,expected[i]);
+    const done=await resumePlannedWorkStep({
+      ...f.args,previousManifest:manifest,
+    });
+    assert.equal(done.status,"ADVANCED");
+    assert.equal(done.taskId,expected[i]);
+    assert.equal(done.manifest.tasks[i].status,"VERIFIED");
+    assert.match(done.manifest.tasks[i].receiptSha256,/^[a-f0-9]{64}$/);
+    assert.deepEqual(f.supervisor.calls,expected.slice(0,i+1).map(id=>
+      "build "+id+" SECRET_PAYLOAD_NOT_FOR_MANIFEST"));
+    // The next distinct task begins only after verified changes are
+    // independently checked and committed in the workspace.
+    f.git("add",expected[i]+".txt");
+    f.git("commit","-q","-m","verify "+expected[i]);
+    manifest=await buildCanonicalContextManifest(f.args);
+    const cold=await TaskCoordinator.load({
+      stateFile:f.stateFile,workspaceRoot:f.workspaceRoot,
+      workspaceId:"main",supervisor:f.supervisor,
+    });
+    assert.equal(cold.getState().tasks[i].status,"VERIFIED");
+  }
+  const last=await inspectPlannedWorkResumption({
+    ...f.args,previousManifest:manifest,
+  });
+  assert.equal(last.status,"COMPLETE");
+  assert.equal(last.action,"REPORT_VERIFIED");
+  const final=await resumePlannedWorkStep({
+    ...f.args,previousManifest:manifest,
+  });
+  assert.equal(final.status,"COMPLETE");
+  assert.equal(f.supervisor.calls.length,3);
+  const old=await AgentSession.load({
+    sessionsDir:f.sessionsDir,sessionId:f.parent.sessionId,
+  });
+  assert.equal(old.state.automaticContextRotation.nextSessionId,f.child.sessionId);
+});
+
+test("CM-03 running Worker resumes monitoring without another submission",async t=>{
+  const f=await cm03Fixture(t);
+  f.supervisor.setCreationStatus("running");
+  const started=await resumePlannedWorkStep(f.args);
+  assert.equal(started.status,"ADVANCED");
+  assert.equal(started.action,"START_TASK");
+  assert.equal(f.supervisor.calls.length,1);
+  const monitoring=await inspectPlannedWorkResumption({
+    ...f.args,previousManifest:started.manifest,
+  });
+  assert.equal(monitoring.status,"READY");
+  assert.equal(monitoring.action,"MONITOR_WORKER");
+  const resumed=await resumePlannedWorkStep({
+    ...f.args,previousManifest:started.manifest,
+  });
+  assert.equal(resumed.action,"MONITOR_WORKER");
+  assert.equal(f.supervisor.calls.length,1);
+  const persisted=await TaskCoordinator.load({
+    stateFile:f.stateFile,workspaceRoot:f.workspaceRoot,
+    workspaceId:"main",supervisor:f.supervisor,
+  });
+  const task=persisted.getState().tasks[0];
+  assert.equal(task.status,"RUNNING");
+  assert.ok(task.supervisorTaskId);
+});
+
+test("CM-03 prior verified receipts are immutable across conversations",async t=>{
+  const f=await cm03Fixture(t);
+  const before=await buildCanonicalContextManifest(f.args);
+  await resumePlannedWorkStep({...f.args,previousManifest:before});
+  f.git("add","one.txt");
+  f.git("commit","-q","-m","verify one");
+  const current=await buildCanonicalContextManifest(f.args);
+  assert.equal(current.tasks[0].status,"VERIFIED");
+  const forged=structuredClone(current);
+  forged.tasks[0].receiptSha256="a".repeat(64);
+  await assert.rejects(inspectPlannedWorkResumption({
+    ...f.args,previousManifest:forged,
+  }),{code:"CONTEXT_PLAN_RESUME_UNSAFE"});
+  assert.equal(f.supervisor.calls.length,1);
+  const future=await inspectPlannedWorkResumption({
+    ...f.args,previousManifest:current,
+  });
+  assert.equal(future.taskId,"two");
+});
+
+test("CM-03 rejects unrelated replacement Session and unsafe workspace",async t=>{
+  const f=await cm03Fixture(t);
+  const other=await AgentSession.create({
+    sessionsDir:f.sessionsDir,projectRoot:f.workspaceRoot,task:"Unrelated task",
+  });
+  await other.update({previousContextSessionId:f.parent.sessionId});
+  await assert.rejects(inspectPlannedWorkResumption({
+    ...f.args,session:other,
+  }),{code:"CONTEXT_PLAN_RESUME_UNSAFE"});
+  const workspace=path.join(f.root,"unrelated");
+  await fs.mkdir(workspace);
+  await assert.rejects(inspectPlannedWorkResumption({
+    ...f.args,workspaceRoot:workspace,
+  }),{code:"CONTEXT_PLAN_RESUME_UNSAFE"});
+  assert.equal(f.supervisor.calls.length,0);
+});
+
+
+test("CM-03 never starts unsubmitted work in a dirty workspace",async t=>{
+  const f=await cm03Fixture(t);
+  await fs.writeFile(path.join(f.workspaceRoot,"untracked-modification.txt"),"untrusted content");
+  const result=await inspectPlannedWorkResumption(f.args);
+  assert.equal(result.action,"START_TASK");
+  assert.equal(result.status,"BLOCKED");
+  assert.ok(result.reasons.includes("WORKTREE_DIRTY"));
+  const resumed=await resumePlannedWorkStep(f.args);
+  assert.equal(resumed.status,"BLOCKED");
+  assert.equal(f.supervisor.calls.length,0);
+});
+
+
+test("CM-03 blocked_uncertain Worker cannot be resumed automatically",async t=>{
+  const f=await cm03Fixture(t);
+  f.supervisor.setCreationStatus("running");
+  const initial=await resumePlannedWorkStep(f.args);
+  assert.equal(initial.action,"START_TASK");
+  assert.equal(f.supervisor.calls.length,1);
+  const state=(await TaskCoordinator.load({
+    stateFile:f.stateFile,workspaceRoot:f.workspaceRoot,
+    workspaceId:"main",supervisor:f.supervisor,
+  })).getState();
+  const workerId=state.tasks[0].supervisorTaskId;
+  f.supervisor.setStatus(workerId,"blocked_uncertain");
+  const decision=await inspectPlannedWorkResumption(f.args);
+  assert.equal(decision.status,"BLOCKED");
+  assert.ok(decision.reasons.includes("WORKER_COMPLETION_UNCERTAIN"));
+  const repeat=await resumePlannedWorkStep(f.args);
+  assert.equal(repeat.status,"BLOCKED");
+  assert.equal(f.supervisor.calls.length,1);
+  const current=await TaskCoordinator.load({
+    stateFile:f.stateFile,workspaceRoot:f.workspaceRoot,
+    workspaceId:"main",supervisor:f.supervisor,
+  });
+  assert.equal(current.getState().tasks[0].supervisorTaskId,workerId);
 });

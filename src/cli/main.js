@@ -953,6 +953,7 @@ autonomyCommand
   .command("resume")
   .description("Resume the existing autonomy checkpoint without resubmitting verified tasks")
   .requiredOption("--state <path>", "Existing checkpoint JSON path")
+  .option("--conversation-session <sessionId>", "Verify a rotated conversation Session before continuing tasks")
   .option("--timeout-ms <milliseconds>", "Maximum execution time", "120000")
   .action(async (_, command) => {
     assertNativeRuntimeSupported();
@@ -960,6 +961,7 @@ autonomyCommand
     const result = await runAutonomyCommand({
       action: "resume", stateFile: opts.state,
       options: opts, timeoutMs: Number(opts.timeoutMs),
+      conversationSessionId: opts.conversationSession ?? null,
     });
     if (result.status !== "VERIFIED") process.exitCode = 1;
   });
