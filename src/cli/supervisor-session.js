@@ -4,6 +4,7 @@ import { AgentSession } from "../session/agent-session.js";
 import { TaskSupervisor } from "../supervisor/task-supervisor.js";
 import { isProcessAlive } from "../browser/cdp-state.js";
 import { ApprovalStore } from "../policy/approval-store.js";
+import { inspectSessionContext } from "../context/context-manager.js";
 import { promptForSelect, ShellChatInput } from "./prompt-input.js";
 
 const TERMINAL = new Set(["completed", "cancelled", "paused", "blocked_uncertain", "failed"]);
@@ -251,6 +252,20 @@ break;
 }
 if (task.result?.message) output(task.result.message);
 output(`[Supervisor] Completed turn for session ${session.sessionId}`);
+try {
+  const contextSession = await AgentSession.load({ sessionsDir, sessionId: session.sessionId });
+  const pressure = await inspectSessionContext(contextSession);
+  if (pressure.warning) {
+    output(`[Context] Long conversation: ${pressure.turns} turns; transcript ${pressure.transcriptBytes} bytes (approximate, not provider token usage).`);
+    if (pressure.rotationAllowed) {
+      output(`[Context] Safe checkpoint. To start a fresh conversation: wtagent context rotate ${session.sessionId}`);
+    } else {
+      output(`[Context] Rotation blocked: ${pressure.blockers.join(", ")}`);
+    }
+  }
+} catch {
+  // Monitoring must never turn an already completed task into a failure.
+}
 if (!interactive) return task.result;
 const freshSession = await AgentSession.load({ sessionsDir, sessionId: session.sessionId });
 const next = await readNextMessage({
