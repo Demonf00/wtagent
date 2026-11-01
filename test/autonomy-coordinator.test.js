@@ -594,3 +594,48 @@ test("FV-03 preserves schema 1 file-only checkpoint compatibility without invent
   assert.equal(resumed.status, "VERIFIED");
   assert.ok(resumed.tasks.every((task) => task.verificationReceipt === undefined));
 });
+
+
+test("FV-04 resume detects source drift without replaying successful verification", async (t) => {
+  const f = await fixture(t);
+  await fs.mkdir(path.join(f.workspaceRoot, "src"));
+  await fs.mkdir(path.join(f.workspaceRoot, "test"));
+  await fs.writeFile(path.join(f.workspaceRoot, "src", "app.js"), "export const version = 1;\n");
+  const testSource = [
+    'const test = require("node:test");',
+    'const fs = require("node:fs");',
+    'test("record execution", () => {',
+    '  const file = "runs.txt";',
+    '  const n = fs.existsSync(file) ? Number(fs.readFileSync(file, "utf8")) : 0;',
+    '  fs.writeFileSync(file, String(n + 1));',
+    '});',
+  ].join("\n");
+  await fs.writeFile(path.join(f.workspaceRoot, "test", "accept.test.js"), testSource);
+  const supervisor = fakeSupervisor({ workspaceRoot: f.workspaceRoot });
+  const proposed = {
+    goal: "Verify and detect input drift on resume",
+    tasks: [{
+      id: "check", instruction: "run independent test once", dependsOn: [],
+      acceptance: [{ kind: "command", program: "node",
+        argv: ["--test", "test/accept.test.js"], cwd: ".", timeoutMs: 10000 }],
+    }],
+  };
+  const coordinator = await TaskCoordinator.create({ ...f, supervisor, plan: proposed });
+  const completed = await coordinator.run({ timeoutMs: 15000, pollMs: 1 });
+  assert.equal(completed.status, "VERIFIED", completed.lastError);
+  assert.equal(await fs.readFile(path.join(f.workspaceRoot, "runs.txt"), "utf8"), "1");
+  assert.match(completed.tasks[0].evidence[0].inputsHash, /^[a-f0-9]{64}$/);
+
+  const restored = await TaskCoordinator.load({ ...f, supervisor });
+  assert.equal((await restored.tick()).status, "VERIFIED");
+  assert.equal(await fs.readFile(path.join(f.workspaceRoot, "runs.txt"), "utf8"), "1",
+    "Resume must never execute an already-completed command");
+  assert.deepEqual(supervisor.calls, ["run independent test once"]);
+
+  await fs.writeFile(path.join(f.workspaceRoot, "src", "app.js"), "export const version = 2;\n");
+  const drift = await restored.tick();
+  assert.equal(drift.status, "BLOCKED");
+  assert.equal(drift.lastError, "VERIFIER_INPUT_DRIFT");
+  assert.equal(await fs.readFile(path.join(f.workspaceRoot, "runs.txt"), "utf8"), "1");
+  assert.deepEqual(supervisor.calls, ["run independent test once"]);
+});

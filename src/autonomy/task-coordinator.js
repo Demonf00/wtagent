@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { replaceFileAtomic } from "../shared/atomic-write.js";
 import { executeCommandCheck, commandCheckHash } from "./command-verifier.js";
 import { makeVerificationReceipt, assertVerificationReceipt } from "./verification-receipt.js";
+import { assertVerificationInputsUnchanged } from "./verification-inputs.js";
 
 const TASK_ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 const HASH = /^[a-f0-9]{64}$/;
@@ -225,6 +226,8 @@ async function verifyArtifacts(root, task, evidence = null) {
           || prior.exitCode !== 0 || prior.timedOut !== false || prior.signal !== null) {
           throw invalid("Command verification evidence is missing or invalid.", "VERIFIER_EVIDENCE_INVALID");
         }
+        // Read-only revalidation; never rerun tests or npm scripts on resume.
+        await assertVerificationInputsUnchanged(root, prior);
         results.push(prior);
       } else {
         results.push(await executeCommandCheck(root, check));

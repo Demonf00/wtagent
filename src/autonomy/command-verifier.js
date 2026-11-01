@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { runProgram } from "../tools/terminal-exec.js";
+import {
+  fingerprintVerificationInputs,
+  assertVerificationInputsUnchanged,
+} from "./verification-inputs.js";
 
 const APPROVED_SCRIPTS = new Set([
   "check", "test", "test:unit", "test:integration", "test:windows",
@@ -93,6 +97,9 @@ export async function executeCommandCheck(root, check, {
     }
   }
 
+  // Snapshot recognized source, test and configuration inputs before running.
+  // The process must not silently change those inputs while being verified.
+  const inputs = await fingerprintVerificationInputs(workspace);
   let result;
   try {
     result = await run({
@@ -119,8 +126,10 @@ export async function executeCommandCheck(root, check, {
   if (result.ok !== true || result.exitCode !== 0 || result.signal) {
     throw reject("Verification command did not pass.", "VERIFIER_COMMAND_FAILED");
   }
+  await assertVerificationInputsUnchanged(workspace, inputs);
   return {
     kind: "command",
+    ...inputs,
     checkHash: commandCheckHash(check),
     exitCode: 0,
     timedOut: false,
