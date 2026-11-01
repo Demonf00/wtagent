@@ -446,7 +446,7 @@
     {
       "id": "DP-01",
       "phase": "Dynamic Planning",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "FR-04"
       ],
@@ -461,14 +461,19 @@
         "Already verified tasks remain immutable",
         "Concurrent plan revision conflicts are detected"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "bf329ca35c0df8e2158b9148214bd711b3a1ed3d",
+      "testEvidence": {
+        "full": "node --test: 922 total, 909 passed, 13 skipped, 0 failed",
+        "syntax": "node scripts/check-syntax.js: 179 files",
+        "diff": "git diff --check: passed",
+        "focused": "38 coordinator and DP-01 tests passed"
+      },
+      "notes": "Persisted planRevision and guarded revisePlan API enable bounded replanning of never-started TODO tasks. Complete DAG revalidation prevents cycles and unknown prerequisites; started/verified task definitions and evidence remain immutable. Optimistic revision checks, cross-instance disk comparison and a revision lock reject conflicting writes. Legacy checkpoints remain compatible."
     },
     {
       "id": "DP-02",
       "phase": "Dynamic Planning",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "DP-01"
       ],
