@@ -778,7 +778,7 @@
     {
       "id": "SU-01",
       "phase": "Controlled Self-Upgrade",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "OB-03"
       ],
@@ -794,14 +794,19 @@
         "Known-good runtime remains intact",
         "Reports exact candidate SHA and skipped live checks"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "f8bc8915cef054704a11733be64afb1c849d2894",
+      "testEvidence": {
+        "syntax": "npm run check: Syntax OK, 200 files",
+        "fullSuite": "npm test: 1004 tests; 991 passed, 0 failed, 13 skipped",
+        "focused": "3/3 SU-01 tests passed (broken candidate, known-good preservation, exact SHA, skipped live checks)",
+        "diff": "git diff --check and git diff --cached --check passed"
+      },
+      "notes": "Trusted entrypoint verifies an exact local commit SHA in a disposable detached worktree. A broken candidate is rejected and successful verification does not promote candidate. Reports enumerate skipped live checks. Git worktrees are not an operating-system sandbox and the running Supervisor is not replaced."
     },
     {
       "id": "SU-02",
       "phase": "Controlled Self-Upgrade",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "SU-01"
       ],
