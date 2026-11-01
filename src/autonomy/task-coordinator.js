@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { replaceFileAtomic } from "../shared/atomic-write.js";
+import { annotateCheckpointFailures } from "./failure-classifier.js";
 import { executeCommandCheck, commandCheckHash } from "./command-verifier.js";
 import { makeVerificationReceipt, assertVerificationReceipt } from "./verification-receipt.js";
 import { assertSavedTestSummary } from "./test-summary.js";
@@ -475,6 +476,7 @@ export class TaskCoordinator {
       }
       if (delivery.status === "DELIVERED") assertGoalReceipt(state);
     }
+    annotateCheckpointFailures(state);
     return new TaskCoordinator({ stateFile: file, workspaceRoot: root, workspaceId, supervisor, state });
   }
 
@@ -487,6 +489,7 @@ export class TaskCoordinator {
   }
 
   async #save() {
+    annotateCheckpointFailures(this.state);
     await persist(this.stateFile, this.state);
   }
 
