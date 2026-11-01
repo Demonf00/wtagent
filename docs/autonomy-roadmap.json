@@ -112,7 +112,7 @@
     {
       "id": "FV-03",
       "phase": "Functional Verification",
-      "status": "IN_PROGRESS",
+      "status": "VERIFIED",
       "dependsOn": [
         "FV-02"
       ],
@@ -127,14 +127,28 @@
         "Missing or tampered evidence fails closed",
         "Verified tasks keep reproducible evidence"
       ],
-      "commitSha": null,
-      "testEvidence": null,
-      "notes": ""
+      "commitSha": "6d167251865a708019c429ffd079353439e1e83c",
+      "testEvidence": {
+        "syntax": "159 files OK",
+        "specialized": {
+          "passed": 30,
+          "failed": 0,
+          "skipped": 0
+        },
+        "full": {
+          "tests": 852,
+          "passed": 839,
+          "failed": 0,
+          "skipped": 13
+        },
+        "windowsLiveBrowser": "included in full suite; targeted browser 5/5"
+      },
+      "notes": "Schema 2 versioned verification receipts bind plan/workspace/task, acceptance/baseline, command results, environment. Missing/tampered receipts fail closed on load and resume. Non-secret digest is integrity detection, not malicious-writer authentication. CLI status supports schema 1/2; Chromium test retries unsafe random ports."
     },
     {
       "id": "FV-04",
       "phase": "Functional Verification",
-      "status": "TODO",
+      "status": "IN_PROGRESS",
       "dependsOn": [
         "FV-03"
       ],
