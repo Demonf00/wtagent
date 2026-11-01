@@ -90,9 +90,19 @@ test("isolated Chromium interacts with local web application and captures failur
   });
   const browser = new TestBrowser();
   t.after(() => browser.close());
-  const url = `http://127.0.0.1:${server.address().port}/`;
+  let url = `http://127.0.0.1:${server.address().port}/`;
   try {
-    await browser.navigate(url);
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await browser.navigate(url);
+        break;
+      } catch (error) {
+        if (!/ERR_UNSAFE_PORT/i.test(error.message) || attempt >= 5) throw error;
+        await new Promise((resolve) => server.close(resolve));
+        await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+        url = `http://127.0.0.1:${server.address().port}/`;
+      }
+    }
   } catch (error) {
     if (/executable doesn't exist|not found|browserType.launch|ENOENT/i.test(error.message)) {
       t.skip(`Chrome unavailable for real-browser integration: ${error.message.slice(0, 180)}`);

@@ -122,7 +122,8 @@ export async function runAutonomyCommand({
       throw fail("No autonomy checkpoint exists.", "AUTONOMY_STATE_NOT_FOUND");
     }
     const state = JSON.parse(await fs.readFile(target, "utf8"));
-    if (state.schema !== 1 || state.workspaceRoot !== workspaceRoot
+    if (!(hasExecution ? [1, 2].includes(state.schema) : state.schema === 1)
+        || state.workspaceRoot !== workspaceRoot
         || state.workspaceId !== WORKSPACE_ID) {
       throw fail("Autonomy checkpoint workspace mismatch.", "AUTONOMY_STATE_UNSAFE");
     }

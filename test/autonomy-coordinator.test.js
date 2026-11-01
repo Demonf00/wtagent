@@ -464,10 +464,8 @@ test("FV-02 forged or incomplete command evidence fails closed on resume", async
   const state = JSON.parse(await fs.readFile(f.stateFile, "utf8"));
   state.tasks[0].evidence[0].exitCode = 1;
   await fs.writeFile(f.stateFile, JSON.stringify(state));
-  const loaded = await TaskCoordinator.load({ ...f, supervisor });
-  const resumed = await loaded.tick();
-  assert.equal(resumed.status, "BLOCKED");
-  assert.equal(resumed.lastError, "VERIFIER_EVIDENCE_INVALID");
+  await assert.rejects(TaskCoordinator.load({ ...f, supervisor }),
+    { code: "VERIFIER_EVIDENCE_INVALID" });
 });
 
 test("FV-02 interrupted in-flight command verification is not automatically replayed", async (t) => {
@@ -490,4 +488,109 @@ test("FV-02 interrupted in-flight command verification is not automatically repl
   assert.equal(resumed.status, "BLOCKED");
   assert.equal(resumed.lastError, "VERIFIER_COMPLETION_UNKNOWN");
   assert.equal(resumed.tasks[0].evidence, null);
+});
+
+
+test("FV-03 receipts bind completed tasks, workspace identity, evidence, and local environment", async (t) => {
+  const f = await fixture(t);
+  const supervisor = fakeSupervisor({
+    workspaceRoot: f.workspaceRoot,
+    outputs: { "build receipt": ["receipt.txt", "documented output"] },
+  });
+  const proposed = {
+    goal: "Save a versioned verification receipt",
+    tasks: [{
+      id: "receipt", instruction: "build receipt", dependsOn: [],
+      acceptance: [{ kind: "file", path: "receipt.txt", minBytes: 1 }],
+    }],
+  };
+  const coordinator = await TaskCoordinator.create({ ...f, supervisor, plan: proposed });
+  const result = await coordinator.run({ timeoutMs: 5000, pollMs: 1 });
+  assert.equal(result.status, "VERIFIED");
+  assert.equal(result.schema, 2);
+  const task = result.tasks[0];
+  assert.equal(task.verificationReceipt.schema, 1);
+  assert.equal(task.verificationReceipt.planId, result.planId);
+  assert.equal(task.verificationReceipt.workspaceId, result.workspaceId);
+  assert.equal(task.verificationReceipt.workspaceRoot, result.workspaceRoot);
+  assert.equal(task.verificationReceipt.taskId, task.id);
+  assert.equal(task.verificationReceipt.supervisorTaskId, task.supervisorTaskId);
+  assert.equal(task.verificationReceipt.idempotencyKey, task.idempotencyKey);
+  assert.equal(task.verificationReceipt.environment.node, process.version);
+  assert.equal(task.verificationReceipt.environment.platform, process.platform);
+  assert.match(task.verificationReceipt.digest, /^[a-f0-9]{64}$/);
+  assert.match(task.verificationReceipt.baselineHash, /^[a-f0-9]{64}$/);
+  assert.match(task.verificationReceipt.evidenceHash, /^[a-f0-9]{64}$/);
+  const reloaded = await TaskCoordinator.load({ ...f, supervisor });
+  assert.equal((await reloaded.tick()).status, "VERIFIED");
+});
+
+test("FV-03 rejects omitted, mutated, and cross-identity verification receipts during load", async (t) => {
+  const f = await fixture(t);
+  const supervisor = fakeSupervisor({
+    workspaceRoot: f.workspaceRoot,
+    outputs: { "build integrity": ["integrity.txt", "good output"] },
+  });
+  const proposed = {
+    goal: "Prevent accidental evidence corruption",
+    tasks: [{
+      id: "integrity", instruction: "build integrity", dependsOn: [],
+      acceptance: [{ kind: "file", path: "integrity.txt", minBytes: 1 }],
+    }],
+  };
+  const coordinator = await TaskCoordinator.create({ ...f, supervisor, plan: proposed });
+  assert.equal((await coordinator.run({ timeoutMs: 5000, pollMs: 1 })).status, "VERIFIED");
+  const pristine = JSON.parse(await fs.readFile(f.stateFile, "utf8"));
+  const corruptions = [
+    ["missing receipt", (s) => { s.tasks[0].verificationReceipt = null; }],
+    ["wrong digest", (s) => { s.tasks[0].verificationReceipt.digest = "0".repeat(64); }],
+    ["wrong task", (s) => { s.tasks[0].verificationReceipt.taskId = "other"; }],
+    ["wrong plan", (s) => { s.tasks[0].verificationReceipt.planId = randomUUID(); }],
+    ["wrong environment", (s) => { s.tasks[0].verificationReceipt.environment.node = "v0.0.0"; }],
+    ["changed evidence", (s) => { s.tasks[0].evidence[0].bytes += 1; }],
+    ["changed file baseline", (s) => { s.tasks[0].baseline[0].sha256 = "1".repeat(64); }],
+    ["changed acceptance", (s) => { s.tasks[0].acceptance[0].minBytes += 1; }],
+    ["changed instruction", (s) => { s.tasks[0].instruction += " changed"; }],
+    ["unexpected receipt field", (s) => { s.tasks[0].verificationReceipt.extra = true; }],
+  ];
+  for (const [label, mutate] of corruptions) {
+    const changed = structuredClone(pristine);
+    mutate(changed);
+    await fs.writeFile(f.stateFile, JSON.stringify(changed));
+    await assert.rejects(TaskCoordinator.load({ ...f, supervisor }),
+      { code: "VERIFIER_EVIDENCE_INVALID" }, label);
+  }
+  await fs.writeFile(f.stateFile, JSON.stringify(pristine));
+  assert.equal((await TaskCoordinator.load({ ...f, supervisor })).getState().status, "VERIFIED");
+});
+
+test("FV-03 rejects receipts attached to tasks that are not VERIFIED", async (t) => {
+  const f = await fixture(t);
+  const supervisor = fakeSupervisor({ workspaceRoot: f.workspaceRoot });
+  await TaskCoordinator.create({ ...f, supervisor, plan: plan() });
+  const state = JSON.parse(await fs.readFile(f.stateFile, "utf8"));
+  state.tasks[0].verificationReceipt = { schema: 1 };
+  await fs.writeFile(f.stateFile, JSON.stringify(state));
+  await assert.rejects(TaskCoordinator.load({ ...f, supervisor }),
+    { code: "VERIFIER_EVIDENCE_INVALID" });
+});
+
+test("FV-03 preserves schema 1 file-only checkpoint compatibility without inventing receipts", async (t) => {
+  const f = await fixture(t);
+  const supervisor = fakeSupervisor({
+    workspaceRoot: f.workspaceRoot,
+    outputs: { "build one": ["one.txt", "first"],
+      "build two": ["two.txt", "second"], "build three": ["three.txt", "third"] },
+  });
+  const coordinator = await TaskCoordinator.create({ ...f, supervisor, plan: plan() });
+  assert.equal((await coordinator.run({ timeoutMs: 5000, pollMs: 1 })).status, "VERIFIED");
+  const state = JSON.parse(await fs.readFile(f.stateFile, "utf8"));
+  state.schema = 1;
+  for (const task of state.tasks) delete task.verificationReceipt;
+  await fs.writeFile(f.stateFile, JSON.stringify(state));
+  const legacy = await TaskCoordinator.load({ ...f, supervisor });
+  const resumed = await legacy.tick();
+  assert.equal(resumed.schema, 1);
+  assert.equal(resumed.status, "VERIFIED");
+  assert.ok(resumed.tasks.every((task) => task.verificationReceipt === undefined));
 });

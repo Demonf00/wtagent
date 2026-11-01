@@ -4,6 +4,7 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { replaceFileAtomic } from "../shared/atomic-write.js";
 import { executeCommandCheck, commandCheckHash } from "./command-verifier.js";
+import { makeVerificationReceipt, assertVerificationReceipt } from "./verification-receipt.js";
 
 const TASK_ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 const HASH = /^[a-f0-9]{64}$/;
@@ -287,12 +288,12 @@ export class TaskCoordinator {
     const checked = validateTaskPlan(plan);
     const planId = randomUUID();
     const state = {
-      schema: 1, planId, workspaceRoot: root, workspaceId,
+      schema: 2, planId, workspaceRoot: root, workspaceId,
       goal: checked.goal, status: "RUNNING", lastError: null,
       tasks: checked.tasks.map((task) => ({
         ...task, status: "TODO", supervisorTaskId: null,
         idempotencyKey: `autonomy:${planId}:${task.id}`,
-        baseline: null, evidence: null, error: null,
+        baseline: null, evidence: null, verificationReceipt: null, error: null,
       })),
     };
     await persist(file, state);
@@ -310,7 +311,7 @@ export class TaskCoordinator {
       throw invalid("Unsafe coordinator checkpoint.", "STATE_UNSAFE");
     }
     const state = JSON.parse(await fs.readFile(file, "utf8"));
-    if (state.schema !== 1 || state.workspaceRoot !== root
+    if (![1, 2].includes(state.schema) || state.workspaceRoot !== root
       || state.workspaceId !== workspaceId
       || !/^[a-f0-9-]{36}$/.test(state.planId ?? "")
       || !Array.isArray(state.tasks)) {
@@ -337,6 +338,16 @@ export class TaskCoordinator {
       || (task.status === "VERIFIED" && !Array.isArray(task.evidence)))) {
       throw invalid("Invalid persisted task state.", "STATE_UNSAFE");
     }
+    if (state.schema >= 2) {
+      for (const task of state.tasks) {
+        if (task.status === "VERIFIED") {
+          assertVerificationReceipt(state, task);
+        } else if (task.verificationReceipt != null) {
+          throw invalid("Unverified task cannot carry a completed verification receipt.",
+            "VERIFIER_EVIDENCE_INVALID");
+        }
+      }
+    }
     return new TaskCoordinator({ stateFile: file, workspaceRoot: root, workspaceId, supervisor, state });
   }
 
@@ -355,6 +366,9 @@ export class TaskCoordinator {
     for (const task of this.state.tasks) {
       if (task.status === "VERIFIED") {
         try {
+          if (this.state.schema >= 2) {
+            assertVerificationReceipt(this.state, task);
+          }
           await verifyArtifacts(this.workspaceRoot, task, task.evidence);
         } catch (error) {
           this.state.status = "BLOCKED";
@@ -467,6 +481,10 @@ export class TaskCoordinator {
           await this.#save();
         }
         active.evidence = await verifyArtifacts(this.workspaceRoot, active);
+        if (this.state.schema >= 2) {
+          active.verificationReceipt = makeVerificationReceipt(
+            this.state, active, active.evidence);
+        }
         active.status = "VERIFIED";
         active.verificationStarted = false;
         active.error = null;
