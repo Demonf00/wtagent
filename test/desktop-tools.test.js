@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import { ToolRegistry } from "../src/tools/registry.js";
 import { PolicyEngine } from "../src/policy/policy-engine.js";
 import { registerDesktopTools } from "../src/desktop/windows-desktop.js";
@@ -101,7 +104,7 @@ test("Desktop observe returns real file and the runtime attaches it only from in
     assert.equal(out[0].options.requireAttachments, true);
     assert.equal(out[0].options.files[0].path, result.meta.modelAttachment);
 
-    const outside = path.join(os.tmpdir(), "other-wtagent-screenshot.png");
+    const outside = path.join(os.tmpdir(), "other-wtagent-" + randomUUID() + ".png");
     await fs.writeFile(outside, Buffer.alloc(512));
     try {
       await assert.rejects(AgentRuntime.prototype.sendToolResult.call(runtime, {
@@ -131,4 +134,22 @@ test("Ambiguous desktop timeout never silently retries or reports success", asyn
   assert.equal(result.ok, false);
   assert.equal(result.meta.completionUnknown, true);
   assert.equal(result.meta.recoverable, false);
+});
+
+
+test("Windows PowerShell desktop helper parses without executing GUI operations", {
+  skip: process.platform !== "win32",
+}, () => {
+  const script = fileURLToPath(new URL("../src/desktop/windows-desktop.ps1", import.meta.url));
+  const command = [
+    "$tokens = $null; $errors = $null;",
+    "[void][System.Management.Automation.Language.Parser]::ParseFile(",
+    "'" + script.replaceAll("'", "''") + "',",
+    "[ref]$tokens, [ref]$errors);",
+    "if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }",
+  ].join(" ");
+  const result = spawnSync("powershell.exe", [
+    "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command,
+  ], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
 });
