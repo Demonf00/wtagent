@@ -42,23 +42,29 @@ export async function runWindowsDesktopOperation(action, payload, {
     maxOutputBytes: 8192,
     maxLogBytes: 8192,
   });
-  if (outcome.completionUnknown) {
+  if (outcome.completionUnknown || outcome.timedOut) {
     // The subprocess may already have acted on the desktop. Do not replay it.
     return failure("Desktop action timed out. Outcome is unknown; inspect the desktop before retrying.", {
       completionUnknown: true,
     });
   }
-  if (outcome.exitCode !== 0 || outcome.timedOut || outcome.error) {
-    return failure("Windows desktop action failed; check that an unlocked interactive session is available.");
+  if (outcome.exitCode !== 0 || outcome.error) {
+    return failure("Windows desktop action failed; check that an unlocked interactive session is available.", {
+      completionUnknown: action !== "observe",
+    });
   }
   let result;
   try {
     result = JSON.parse(outcome.stdout.trim());
   } catch {
-    return failure("Windows desktop returned an invalid result.");
+    return failure("Windows desktop returned an invalid result.", {
+      completionUnknown: action !== "observe",
+    });
   }
   if (result?.ok !== true || typeof result !== "object" || Array.isArray(result)) {
-    return failure("Windows desktop did not confirm the operation.");
+    return failure("Windows desktop did not confirm the operation.", {
+      completionUnknown: action !== "observe",
+    });
   }
   return { ok: true, data: result };
 }
