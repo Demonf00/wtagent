@@ -11,7 +11,9 @@ export const RECOVERY_DEFAULTS = Object.freeze({
   maxRetries: 3,
   retryBaseMs: 1_000,
   retryMaxMs: 30_000,
-  progressTimeoutMs: 180_000,
+  // A web-model reasoning turn can be silent for several minutes. Heartbeats
+  // still detect a dead child; avoid killing a healthy but quiet generation.
+  progressTimeoutMs: 900_000,
   heartbeatMs: 5_000,
 });
 
