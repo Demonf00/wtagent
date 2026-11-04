@@ -83,7 +83,20 @@ public static class WTDesktopClick {
     if ($button -notin @("left", "right") -or $clicks -lt 1 -or $clicks -gt 2) {
       throw "Invalid desktop click."
     }
-    if (-not [WTDesktopClick]::SetCursorPos($x, $y)) {
+    # Coordinates refer to the most recent scaled screenshot, not to the
+    # full-resolution physical desktop. Map all-monitor preview pixels back.
+    $virtual = [System.Windows.Forms.SystemInformation]::VirtualScreen
+    $scale = [Math]::Min(
+      1.0, [Math]::Min(1600.0 / $virtual.Width, 1600.0 / $virtual.Height)
+    )
+    $previewWidth = [Math]::Max(1, [int][Math]::Round($virtual.Width * $scale))
+    $previewHeight = [Math]::Max(1, [int][Math]::Round($virtual.Height * $scale))
+    if ($x -lt 0 -or $y -lt 0 -or $x -ge $previewWidth -or $y -ge $previewHeight) {
+      throw "Click is outside the current screenshot preview."
+    }
+    $nativeX = $virtual.X + [int][Math]::Floor(($x + 0.5) * $virtual.Width / $previewWidth)
+    $nativeY = $virtual.Y + [int][Math]::Floor(($y + 0.5) * $virtual.Height / $previewHeight)
+    if (-not [WTDesktopClick]::SetCursorPos($nativeX, $nativeY)) {
       throw "Could not position the cursor."
     }
     $down = if ($button -eq "left") { [uint32]0x0002 } else { [uint32]0x0008 }
