@@ -44,7 +44,8 @@ test("retry delays are capped and options reject invalid values", () => {
     progressTimeoutMs: -1,
   } });
   assert.equal(settings.maxRetries, 2);
-  assert.equal(settings.progressTimeoutMs, 180000);
+  assert.equal(settings.progressTimeoutMs, 900000);
+  assert.equal(recoveryOptions({ recovery: { progressTimeoutMs: 120000 } }).progressTimeoutMs, 120000);
   assert.equal(retryDelay(1, settings), 10);
   assert.equal(retryDelay(2, settings), 20);
   assert.equal(retryDelay(20, settings), 25);
