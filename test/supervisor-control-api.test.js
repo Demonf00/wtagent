@@ -53,6 +53,18 @@ test("control API requires bearer auth and exposes task list only to authorized 
   });
 });
 
+test("health endpoint exposes safe counts but never task content", async () => {
+  await fixture(async ({ request }) => {
+    assert.equal((await request("/v1/health", { auth: false })).status, 401);
+    const response = await request("/v1/health");
+    assert.equal(response.status, 200);
+    assert.equal(response.data.ok, true);
+    assert.deepEqual(response.data.counts, { queued: 1 });
+    assert.ok(response.data.capabilities.includes("approval"));
+    assert.equal(JSON.stringify(response.data).includes(TASK_ID), false);
+  });
+});
+
 test("control API routes task reads, events, and state changes", async () => {
   await fixture(async ({ request, calls }) => {
     assert.equal((await request(`/v1/tasks/${TASK_ID}`)).status, 200);
