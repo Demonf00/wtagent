@@ -254,6 +254,16 @@ export class PolicyEngine {
   }
 
   async evaluate(toolCall, context) {
+    // Native desktop operations can expose visible account data or control
+    // other applications, not just the selected workspace. They always need
+    // explicit per-call approval, even if a previous session enabled allow-all.
+    if (toolCall.name.startsWith("desktop.")) {
+      return {
+        action: "confirm",
+        reasons: ["Native Windows desktop observation/input requires owner approval"],
+        grants: { allowOutside: false },
+      };
+    }
     await this.store?.ensureLoaded();
     if (this.store?.isAlwaysAllowed(toolCall.name)) {
       // The user explicitly opted to skip confirmation for this tool (or for
