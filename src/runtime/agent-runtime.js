@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import {
   cdata,
@@ -634,9 +636,31 @@ export class AgentRuntime {
     suffix = "",
     runtimeTurn = null,
   } = {}) {
+    const files = [];
+    if (result?.name === "desktop.observe" && result?.ok
+        && typeof result?.meta?.modelAttachment === "string") {
+      // Attach an actual screenshot to the WEB model; a text-only local path
+      // cannot be visually inspected. Recheck containment and size before
+      // allowing any provider upload, even after reading persisted state.
+      const root = await fs.realpath(path.resolve(this.session.state.projectRoot));
+      const filename = await fs.realpath(result.meta.modelAttachment);
+      const relative = path.relative(root, filename);
+      if (relative === ".." || relative.startsWith(".." + path.sep)
+          || path.isAbsolute(relative)) {
+        throw new Error("Desktop screenshot is outside the selected workspace.");
+      }
+      const stat = await fs.lstat(filename);
+      if (!stat.isFile() || stat.isSymbolicLink()
+          || stat.size < 100 || stat.size > 8 * 1024 * 1024) {
+        throw new Error("Invalid desktop screenshot attachment.");
+      }
+      files.push({ path: filename, name: "desktop.png" });
+    }
     return await this.sendMessage(
       this.buildToolResultMessage(result, { suffix }),
       {
+        files,
+        requireAttachments: files.length > 0,
         maxBytes: this.limits.maxBrowserToolResultBytes,
         outboundKind: "tool_result",
         runtimeTurn,
