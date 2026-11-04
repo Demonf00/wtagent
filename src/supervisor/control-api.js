@@ -83,6 +83,24 @@ export async function startControlApi({ supervisor, token, port = 0 } = {}) {
       const pathname = new URL(req.url, "http://127.0.0.1").pathname;
       const isGet = req.method === "GET";
       const isPost = req.method === "POST";
+      if (isGet && pathname === "/v1/workspaces") {
+        // Workspace names only: roots stay local and unexposed to Discord.
+        send(res, 200, { workspaces: [...supervisor.workspaces.keys()] });
+        return;
+      }
+      if (isGet && pathname === "/v1/health") {
+        // Expose only sanitized health metadata, not stored instructions,
+        // tool arguments, browser data, or authentication configuration.
+        const counts = {};
+        for (const item of supervisor.list()) {
+          counts[item.status] = (counts[item.status] ?? 0) + 1;
+        }
+        send(res, 200, {
+          ok: true, counts,
+          capabilities: ["tasks", "events", "pause", "resume", "cancel", "approval"],
+        });
+        return;
+      }
       if (isGet && pathname === "/v1/tasks") {
         send(res, 200, { tasks: supervisor.list() });
         return;

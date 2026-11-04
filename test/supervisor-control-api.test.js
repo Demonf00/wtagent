@@ -11,6 +11,7 @@ async function fixture(run) {
   const task = { taskId: TASK_ID, status: "queued" };
   const supervisor = {
     initialized: true,
+    workspaces: new Map([["discord", "/projects/discord"], ["wtagent", "/projects/wtagent"]]),
     list: () => [task],
     get: (id) => { calls.push(["get", id]); return task; },
     getEvents: async (id, after) => { calls.push(["events", id, after]); return []; },
@@ -50,6 +51,22 @@ test("control API requires bearer auth and exposes task list only to authorized 
     const response = await request("/v1/tasks");
     assert.equal(response.status, 200);
     assert.equal(response.data.tasks[0].taskId, TASK_ID);
+  });
+});
+
+test("health endpoint exposes safe counts but never task content", async () => {
+  await fixture(async ({ request }) => {
+    assert.equal((await request("/v1/health", { auth: false })).status, 401);
+    const response = await request("/v1/health");
+    assert.equal(response.status, 200);
+    assert.equal(response.data.ok, true);
+    assert.deepEqual(response.data.counts, { queued: 1 });
+    assert.ok(response.data.capabilities.includes("approval"));
+    assert.equal(JSON.stringify(response.data).includes(TASK_ID), false);
+    const scope = await request("/v1/workspaces");
+    assert.deepEqual(scope.data.workspaces, ["discord", "wtagent"]);
+    assert.equal(JSON.stringify(scope.data).includes("/projects/"), false);
+    assert.equal((await request("/v1/workspaces", { auth: false })).status, 401);
   });
 });
 
